@@ -1,0 +1,35 @@
+[project]
+name = "curiosity-ppo"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.1",
+    "torchvision",
+    "numpy",
+    "opencv-python-headless",
+    "pyyaml",
+    "scipy",
+    "wandb",
+    "imageio",
+    "imageio-ffmpeg",
+    "onnx",
+    "onnxruntime",
+]
+
+[project.optional-dependencies]
+envs = [
+    "gymnasium[atari,accept-rom-license]",
+    "ale-py",
+    "gym==0.26.2",
+    "crafter==1.8.3",
+    "minigrid",
+]
+dev = ["pytest>=7.0", "pytest-cov"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]

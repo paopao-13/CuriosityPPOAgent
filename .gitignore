@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual env
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Test
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Results (大文件)
+results/checkpoints/*.pt
+results/videos/*.mp4
+results/logs/
+results/onnx/*.onnx
+
+# Wandb
+wandb/
+
+# IGA Pages
+.iga/
+
+# Node
+web/node_modules/
+web/dist/
+
+# OS
+Thumbs.db
+.DS_Store

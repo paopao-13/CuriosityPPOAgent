@@ -1,0 +1,17 @@
+torch>=2.1
+torchvision
+numpy
+opencv-python-headless
+pyyaml
+scipy
+wandb
+imageio
+imageio-ffmpeg
+onnx
+onnxruntime
+gymnasium[atari,accept-rom-license]
+ale-py
+gym==0.26.2
+crafter==1.8.3
+minigrid
+pytest>=7.0
