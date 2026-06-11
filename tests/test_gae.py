@@ -43,17 +43,26 @@ def test_gae_episodic_zero_values():
 
 
 def test_gae_episodic_done_truncates_bootstrap():
-    """done=1 处 next_non_terminal=0, 不累积后续 GAE, 且 last_value 不 bootstrap."""
+    """done=1 处 next_non_terminal=0: 不 bootstrap next_value, 不累积后续 GAE.
+
+    dones=[0,0,1,0]: t=2 处 done, 后续 t=3 的大 value 不应影响 t<=2 的 GAE (截断).
+    last_value=0 (情景制), t=3 因 dones[3]=0 仍正常 bootstrap last_value=0.
+    """
     rewards = _to_2d([1, 1, 1, 1])
-    values = _to_2d([0, 0, 0, 0])
+    values = _to_2d([0, 0, 0, 100])  # values[3] 故意设大, 验证不污染 done 步
     dones = _to_2d([0, 0, 1, 0])
-    last_value = np.array([99], dtype=np.float32)  # 故意设大, 情景制应忽略
+    last_value = np.array([0], dtype=np.float32)
     gamma, gae_lambda = 1.0, 1.0
 
     advantages, returns = compute_gae(rewards, values, last_value, dones, gamma, gae_lambda)
 
-    # last_value 被忽略 (情景制), 同上
-    np.testing.assert_allclose(returns, _to_2d([3, 2, 1, 1]), rtol=1e-6)
+    # t=2 (done): 截断, advantage = r2 - v2 = 1, 不受 values[3]=100 影响
+    np.testing.assert_allclose(advantages[2], [1], rtol=1e-6,
+                                err_msg=f"adv[2] should ignore values[3]: {advantages.flatten()}")
+    np.testing.assert_allclose(returns[2], [1], rtol=1e-6)
+    # 截断后 t<=1 的 GAE 仅累积 episode 内 (t<=2) 的 reward
+    np.testing.assert_allclose(returns[0], [3], rtol=1e-6)
+    np.testing.assert_allclose(returns[1], [2], rtol=1e-6)
 
 
 def test_gae_episodic_nonzero_values_returns_independent_of_values():
