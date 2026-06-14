@@ -11,7 +11,7 @@ from curiosity_ppo.utils.amp import AMPManager
 class PPOTrainer:
     """PPO 训练器：双价值头 + AMP + 梯度累积"""
 
-    def __init__(self, actor_critic, config, device='cpu', amp_manager=None):
+    def __init__(self, actor_critic, config, device='cpu', amp_manager=None, obs_preprocess=None):
         self.actor_critic = actor_critic.to(device)
         self.config = config
         self.device = device
@@ -24,6 +24,7 @@ class PPOTrainer:
         self.ent_coef = config.ppo.ent_coef
         self.vf_coef = config.ppo.vf_coef
         self.max_grad_norm = config.ppo.max_grad_norm
+        self.obs_preprocess = obs_preprocess
 
     def update(self, buffer: RolloutBuffer):
         """执行 PPO 更新，返回训练指标 dict"""
@@ -34,7 +35,10 @@ class PPOTrainer:
         for epoch in range(self.ppo_epochs):
             for step, batch in enumerate(buffer.get_mini_batches(self.batch_size)):
                 with self.amp.autocast():
-                    logits, v_ext, v_int = self.actor_critic(batch['obs'])
+                    obs = batch['obs']
+                    if self.obs_preprocess:
+                        obs = self.obs_preprocess(obs)
+                    logits, v_ext, v_int = self.actor_critic(obs)
                     v_ext = v_ext.squeeze(-1)
                     v_int = v_int.squeeze(-1)
 

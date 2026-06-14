@@ -7,7 +7,7 @@
 import torch
 import torch.nn as nn
 
-from .encoders import NatureDQNEncoder
+from .encoders import NatureDQNEncoder, CrafterEncoder
 
 
 class RNDNet(nn.Module):
@@ -16,21 +16,25 @@ class RNDNet(nn.Module):
     Args:
         in_channels: 观测通道数 (Atari 通常为 4 帧堆叠).
         output_dim: target / predictor 输出维度 (默认 512).
+        encoder_cls: 编码器类 (NatureDQNEncoder 用于 84×84, CrafterEncoder 用于 64×64).
     """
 
-    def __init__(self, in_channels: int = 4, output_dim: int = 512):
+    def __init__(self, in_channels: int = 4, output_dim: int = 512, encoder_cls=None):
         super().__init__()
         self.output_dim = output_dim
 
+        if encoder_cls is None:
+            encoder_cls = NatureDQNEncoder
+
         # target 网络: 固定随机初始化, 不更新
-        self.target = NatureDQNEncoder(in_channels=in_channels, out_dim=output_dim)
+        self.target = encoder_cls(in_channels=in_channels, out_dim=output_dim)
         for p in self.target.parameters():
             p.requires_grad = False
         self.target.eval()
 
         # predictor 网络: encoder + FC(512) -> ReLU -> FC(512) -> ReLU -> FC(512)
         self.predictor = nn.Sequential(
-            NatureDQNEncoder(in_channels=in_channels, out_dim=output_dim),
+            encoder_cls(in_channels=in_channels, out_dim=output_dim),
             nn.Linear(output_dim, 512),
             nn.ReLU(),
             nn.Linear(512, 512),
