@@ -1,0 +1,45 @@
+# Atari Montezuma's Revenge 全模块基准 (RND + ICM + Episodic)
+ppo:
+  lr: 1.0e-4
+  clip_range: 0.1
+  ppo_epochs: 4
+  gamma_ext: 0.999
+  gamma_int: 0.99
+  gae_lambda: 0.95
+  ent_coef: 0.001
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  batch_size: 128
+  accumulation_steps: 4
+  n_steps: 128
+  n_envs: 8
+
+rnd:
+  enabled: true
+  output_dim: 512
+  predictor_hidden: 512
+  obs_normalize: true
+  reward_normalize: true
+
+icm:
+  enabled: true
+  feature_dim: 288
+  eta: 0.2
+  hidden_dim: 256
+
+episodic:
+  enabled: true
+  k: 5
+  epsilon: 1.0e-3
+  L: 5
+  capacity: 10000
+
+env:
+  name: atari_montezuma
+  n_envs: 8
+  total_steps: 10000000
+
+ablation: full
+use_amp: true
+seed: 42
+wandb_project: curiosity-ppo
