@@ -143,20 +143,29 @@ def main():
 
     os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
     dynamic_axes = {"obs": {0: "batch"}, "logits": {0: "batch"}}
+    export_kwargs = dict(
+        export_params=True,
+        opset_version=args.opset,
+        do_constant_folding=True,
+        input_names=["obs"],
+        output_names=["logits"],
+        dynamic_axes=dynamic_axes,
+    )
 
+    # PyTorch 2.x 默认使用基于 dynamo 的新导出器 (需 onnxscript);
+    # 项目依赖未声明 onnxscript, 因此优先尝试新导出器, 失败时回退到
+    # 经典 TorchScript 导出器 (dynamo=False), 保证开箱即用.
     with torch.no_grad():
-        torch.onnx.export(
-            policy_net,
-            dummy_input,
-            args.output,
-            export_params=True,
-            opset_version=args.opset,
-            do_constant_folding=True,
-            input_names=["obs"],
-            output_names=["logits"],
-            dynamic_axes=dynamic_axes,
-        )
-    print(f"已导出 ONNX: {args.output}")
+        try:
+            torch.onnx.export(policy_net, dummy_input, args.output, **export_kwargs)
+            exporter = "dynamo"
+        except Exception as e:
+            print(f"新导出器失败 ({e}), 回退到经典导出器 (dynamo=False)...")
+            torch.onnx.export(
+                policy_net, dummy_input, args.output, dynamo=False, **export_kwargs
+            )
+            exporter = "legacy"
+    print(f"已导出 ONNX: {args.output} (exporter={exporter})")
 
     # ---------- 可选: ONNX Runtime 一致性校验 ----------
     if not args.no_verify:
