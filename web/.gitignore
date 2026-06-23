@@ -1,0 +1,24 @@
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# ONNX 模型文件 (体积大, 不提交; 通过 scripts/export_onnx.py 导出后手动放置)
+*.onnx
+
+# 编辑器
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# 日志
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
