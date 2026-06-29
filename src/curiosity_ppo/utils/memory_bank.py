@@ -1,10 +1,9 @@
 """LRU 内存库 (CPU), 用于情景记忆的 kNN 搜索.
 
-使用 OrderedDict 维护插入顺序, 超容量时按 FIFO 淘汰最旧嵌入.
-kNN 采用 numpy 暴力 L2 距离计算, 适合中等规模内存库.
+P2-9: 预分配 numpy 数组, 避免 knn_distances 每次调用 np.stack 重建.
+使用环形缓冲区管理 FIFO 淘汰, write_ptr 循环写入.
 """
 import numpy as np
-from collections import OrderedDict
 
 
 class LRUMemoryBank:
@@ -18,13 +17,15 @@ class LRUMemoryBank:
     def __init__(self, capacity: int = 10000, dim: int = 512):
         self.capacity = capacity
         self.dim = dim
-        self._bank: "OrderedDict[int, np.ndarray]" = OrderedDict()  # key -> np.ndarray
-        self._next_key = 0
+        # P2-9: 预分配数组, 避免每次 knn_distances 调用 np.stack
+        self._data = np.zeros((capacity, dim), dtype=np.float32)
+        self._size = 0
+        self._write_ptr = 0  # 环形缓冲区写指针
 
     @property
     def size(self) -> int:
         """当前库中嵌入数量."""
-        return len(self._bank)
+        return self._size
 
     def add(self, embedding: np.ndarray):
         """添加嵌入向量, 超容量时淘汰最旧.
@@ -32,13 +33,15 @@ class LRUMemoryBank:
         Args:
             embedding: (dim,) 形状的嵌入向量, 内部会拷贝以防外部修改.
         """
-        self._bank[self._next_key] = embedding.copy()
-        self._next_key += 1
-        if len(self._bank) > self.capacity:
-            self._bank.popitem(last=False)  # FIFO 淘汰最旧
+        self._data[self._write_ptr] = embedding
+        self._write_ptr = (self._write_ptr + 1) % self.capacity
+        if self._size < self.capacity:
+            self._size += 1
 
     def knn_distances(self, query: np.ndarray, k: int = 5) -> np.ndarray:
         """numpy 暴力 L2 距离, 返回 k 个最近邻距离 (升序).
+
+        P2-9: 直接使用预分配数组的视图, 无需 np.stack 重建.
 
         Args:
             query: (dim,) 查询向量.
@@ -47,17 +50,17 @@ class LRUMemoryBank:
         Returns:
             (min(k, size),) 升序排列的 L2 距离; 空库返回空数组.
         """
-        if self.size == 0:
+        if self._size == 0:
             return np.array([])
-        all_embeddings = np.stack(list(self._bank.values()))  # (N, dim)
-        diff = all_embeddings - query[np.newaxis, :]  # (N, dim)
+        # 使用预分配数组的有效部分 (视图, 无拷贝)
+        active = self._data[:self._size]  # (N, dim)
+        diff = active - query[np.newaxis, :]  # (N, dim)
         distances = np.sqrt((diff ** 2).sum(axis=1))  # (N,)
         k = min(k, len(distances))
-        # np.partition 取 k 个最小, 再排序保证升序
         k_smallest = np.partition(distances, k - 1)[:k]
         return np.sort(k_smallest)
 
     def clear(self):
         """清空内存库并重置内部计数."""
-        self._bank.clear()
-        self._next_key = 0
+        self._size = 0
+        self._write_ptr = 0

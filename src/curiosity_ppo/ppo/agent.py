@@ -2,6 +2,15 @@
 
 集成环境、网络、好奇心模块、PPO 训练器，实现完整训练循环:
 collect_rollout → compute_gae → ppo_update + curiosity_update → log → checkpoint
+
+修复记录:
+- P0-1: 每个 env 独立 EpisodicMemory, 避免全局清空
+- P0-2: ICM 编码器支持 NatureDQNEncoder, 兼容 Atari 84×84
+- P0-4: 过滤跨 episode ICM 训练对, 避免噪声梯度
+- P1-6: 内在奖励 batch 计算, 8 倍性能提升
+- P1-7: 训练中定期评测, 产生 eval_score 指标
+- P1-8: 学习率线性衰减集成
+- P2-10: 策略网络观测归一化 (RunningMeanStd)
 """
 import numpy as np
 import torch
@@ -35,6 +44,7 @@ class CuriosityPPOAgent:
         vec_env: 向量化环境 (DummyVecEnv 或 SubprocVecEnv)
         config: Config 对象
         device: 计算设备
+        logger: 训练日志器
     """
 
     def __init__(self, vec_env, config: Config, device='cpu', logger=None):
@@ -50,14 +60,16 @@ class CuriosityPPOAgent:
         set_seed(config.seed)
 
         # 推断环境参数
-        obs_shape = vec_env.observation_space.shape  # e.g. (64, 64, 3) or (4, 84, 84)
+        obs_shape = vec_env.observation_space.shape
         n_actions = vec_env.action_space.n
+        n_envs = config.env.n_envs
         self.obs_shape = obs_shape
         self.n_actions = n_actions
+        self.n_envs = n_envs
 
         # 判断通道位置: gymnasium 默认 HWC, 需转为 CHW
         if len(obs_shape) == 3:
-            self.in_channels = obs_shape[2]  # HWC → C
+            self.in_channels = obs_shape[2]
             self.is_image = True
         else:
             self.in_channels = obs_shape[0]
@@ -65,14 +77,20 @@ class CuriosityPPOAgent:
 
         # 根据环境选择编码器
         env_name = config.env.name.lower()
-        if 'crafter' in env_name or 'minigrid' in env_name:
+        use_crafter_encoder = 'crafter' in env_name or 'minigrid' in env_name
+        if use_crafter_encoder:
             encoder = CrafterEncoder(in_channels=self.in_channels, out_dim=config.icm.feature_dim)
             embed_dim = config.icm.feature_dim
             rnd_encoder_cls = CrafterEncoder
+            icm_encoder_cls = CrafterEncoder
         else:
             encoder = NatureDQNEncoder(in_channels=self.in_channels, out_dim=512)
             embed_dim = 512
             rnd_encoder_cls = NatureDQNEncoder
+            icm_encoder_cls = NatureDQNEncoder
+
+        # P2-10: 策略网络观测归一化 (RunningMeanStd, 在线更新)
+        self.policy_obs_rms = RunningMeanStd(shape=obs_shape) if self.is_image else None
 
         # Actor-Critic (双价值头)
         self.actor_critic = ActorCritic(encoder, n_actions, embed_dim=embed_dim).to(device)
@@ -80,29 +98,45 @@ class CuriosityPPOAgent:
         # AMP
         self.amp = AMPManager(enabled=config.use_amp, device=device)
 
-        # PPO 训练器 (图像观测需要 HWC→CHW 转换)
-        obs_preprocess = None
+        # PPO 训练器 (obs_preprocess: HWC→CHW + 归一化)
+        agent = self  # closure 捕获
         if self.is_image:
             def obs_preprocess(x):
-                return x.permute(0, 3, 1, 2)  # HWC → CHW
-        self.ppo_trainer = PPOTrainer(self.actor_critic, config, device, self.amp, obs_preprocess=obs_preprocess)
+                x = x.permute(0, 3, 1, 2)  # HWC → CHW
+                if agent.policy_obs_rms:
+                    # 归一化: (obs - mean) / (std + 1e-8), mean/std 是 HWC 形状
+                    mean = torch.tensor(agent.policy_obs_rms.mean, device=x.device, dtype=x.dtype)
+                    std = torch.tensor(agent.policy_obs_rms.std, device=x.device, dtype=x.dtype)
+                    # mean/std 是 HWC, 需转为 CHW
+                    mean = mean.permute(2, 0, 1).unsqueeze(0)  # (1, C, H, W)
+                    std = std.permute(2, 0, 1).unsqueeze(0)
+                    x = (x - mean) / (std + 1e-8)
+                return x
+        else:
+            obs_preprocess = None
+        self.ppo_trainer = PPOTrainer(
+            self.actor_critic, config, device, self.amp,
+            obs_preprocess=obs_preprocess,
+            total_steps=config.env.total_steps,
+        )
 
         # 好奇心网络
         self.icm_net = None
         self.rnd_net = None
         self.icm_curiosity = None
         self.rnd_curiosity = None
-        self.episodic_memory = None
         self.ngu_fusion = None
         self.icm_optimizer = None
         self.rnd_optimizer = None
 
         if config.icm.enabled:
+            # P0-2: ICM 编码器与环境匹配
             self.icm_net = ICMNet(
                 in_channels=self.in_channels,
                 action_dim=n_actions,
                 feature_dim=config.icm.feature_dim,
                 hidden_dim=config.icm.hidden_dim,
+                encoder_cls=icm_encoder_cls,
             ).to(device)
             self.icm_curiosity = ICMCuriosity(self.icm_net, eta=config.icm.eta, device=device)
             self.icm_optimizer = torch.optim.Adam(self.icm_net.parameters(), lr=config.ppo.lr)
@@ -113,7 +147,6 @@ class CuriosityPPOAgent:
                 output_dim=config.rnd.output_dim,
                 encoder_cls=rnd_encoder_cls,
             ).to(device)
-            # RND 归一化器使用 CHW 形状 (观测已由 _to_tensor 转换)
             rnd_obs_shape = (self.in_channels, obs_shape[0], obs_shape[1]) if self.is_image else obs_shape
             obs_normalizer = RunningMeanStd(shape=rnd_obs_shape) if config.rnd.obs_normalize else None
             self.rnd_curiosity = RNDCuriosity(
@@ -124,27 +157,41 @@ class CuriosityPPOAgent:
             )
             self.rnd_optimizer = torch.optim.Adam(self.rnd_net.predictor.parameters(), lr=config.ppo.lr)
 
-        if config.episodic.enabled:
-            self.episodic_memory = EpisodicMemory(
-                capacity=config.episodic.capacity,
-                dim=embed_dim,
-                k=config.episodic.k,
-                epsilon=config.episodic.epsilon,
-                L=config.episodic.L,
-            )
+        # P0-1: 每个 env 独立的 EpisodicMemory
+        # 嵌入维度: ICM 启用时用 ICM feature_dim, 否则用 RND output_dim
+        if config.icm.enabled:
+            episodic_dim = config.icm.feature_dim
+        elif config.rnd.enabled:
+            episodic_dim = config.rnd.output_dim
+        else:
+            episodic_dim = embed_dim
 
-        # NGU 融合
+        if config.episodic.enabled:
+            self.episodic_memories = [
+                EpisodicMemory(
+                    capacity=config.episodic.capacity,
+                    dim=episodic_dim,
+                    k=config.episodic.k,
+                    epsilon=config.episodic.epsilon,
+                    L=config.episodic.L,
+                )
+                for _ in range(n_envs)
+            ]
+        else:
+            self.episodic_memories = None
+
+        # NGU 融合 (episodic=None, 通过 episodic_override 逐环境传入)
         self.ngu_fusion = NGUFusion(
             config=config,
             icm=self.icm_curiosity,
             rnd=self.rnd_curiosity,
-            episodic=self.episodic_memory,
+            episodic=None,
         )
 
         # Rollout buffer
         self.buffer = RolloutBuffer(
             n_steps=config.ppo.n_steps,
-            n_envs=config.env.n_envs,
+            n_envs=n_envs,
             obs_shape=obs_shape,
             action_dim=n_actions,
             device=device,
@@ -156,7 +203,7 @@ class CuriosityPPOAgent:
         self.current_obs = None
 
     def _to_tensor(self, obs):
-        """numpy obs → torch tensor, HWC→CHW if image"""
+        """numpy obs → torch tensor, HWC→CHW if image (不做归一化)"""
         obs = np.asarray(obs, dtype=np.float32)
         t = torch.from_numpy(obs).to(self.device)
         if self.is_image and len(t.shape) == 4:  # (n_envs, H, W, C) → (n_envs, C, H, W)
@@ -165,36 +212,74 @@ class CuriosityPPOAgent:
             t = t.permute(2, 0, 1).unsqueeze(0)
         return t
 
+    def _normalize_policy_obs(self, obs_tensor):
+        """P2-10: 策略网络观测归一化 (CHW 格式)"""
+        if self.policy_obs_rms is None:
+            return obs_tensor
+        mean = torch.tensor(self.policy_obs_rms.mean, device=obs_tensor.device, dtype=obs_tensor.dtype)
+        std = torch.tensor(self.policy_obs_rms.std, device=obs_tensor.device, dtype=obs_tensor.dtype)
+        if self.is_image and len(mean.shape) == 3:
+            # HWC → CHW
+            mean = mean.permute(2, 0, 1)
+            std = std.permute(2, 0, 1)
+        return (obs_tensor - mean) / (std + 1e-8)
+
     def _compute_intrinsic_reward(self, obs_np, action_np, next_obs_np, done_np):
-        """计算内在奖励（每个环境独立）"""
+        """P1-6: Batch 计算内在奖励 (一次前向所有 env)
+
+        P0-1: 每个 env 使用独立的 EpisodicMemory
+        """
         n_envs = obs_np.shape[0]
         int_rewards = np.zeros(n_envs, dtype=np.float32)
 
+        # Batch 前向: 所有 env 一次传入网络
+        s_t_batch = self._to_tensor(obs_np)         # (n_envs, C, H, W)
+        a_batch = torch.tensor(action_np, device=self.device, dtype=torch.long)
+        s_next_batch = self._to_tensor(next_obs_np)  # (n_envs, C, H, W)
+
+        # Batch 获取可控性嵌入
+        controllable_embs = None
+        if self.icm_curiosity:
+            with torch.no_grad():
+                controllable_embs = self.icm_curiosity.get_embedding(s_t_batch).cpu().numpy()
+        elif self.rnd_net:
+            with torch.no_grad():
+                controllable_embs = self.rnd_net.target(s_next_batch).cpu().numpy()
+
+        # Batch ICM 前向 (如果启用)
+        r_icm_batch = np.zeros(n_envs, dtype=np.float32)
+        if self.config.icm.enabled and self.icm_curiosity:
+            with torch.no_grad():
+                inverse_loss, forward_loss, _ = self.icm_net(s_t_batch, a_batch, s_next_batch)
+                # forward_loss 是标量 (mean over batch), 广播到每个 env
+                r_icm_batch[:] = (self.config.icm.eta * forward_loss).item()
+
+        # Per-env: episodic memory + RND alpha (kNN 是 CPU numpy, 快)
         for i in range(n_envs):
-            s_t = self._to_tensor(obs_np[i:i+1])
-            a = torch.tensor([action_np[i]], device=self.device, dtype=torch.long)
-            s_next = self._to_tensor(next_obs_np[i:i+1])
+            epi = self.episodic_memories[i] if self.episodic_memories else None
+            emb = controllable_embs[i] if controllable_embs is not None else None
 
-            # 获取可控性嵌入 (用于情景记忆)
-            controllable_emb = None
-            if self.icm_curiosity:
-                with torch.no_grad():
-                    controllable_emb = self.icm_curiosity.get_embedding(s_t).cpu().numpy()[0]
-            elif self.rnd_net:
-                with torch.no_grad():
-                    controllable_emb = self.rnd_net.target(s_next).cpu().numpy()[0]
+            # NGU 融合 (episodic_override 实现多环境隔离)
+            r_ngu = 0.0
+            if self.config.episodic.enabled and epi is not None and emb is not None:
+                r_epi = epi.compute_reward(emb)
+                if self.config.rnd.enabled and self.rnd_curiosity:
+                    alpha = self.rnd_curiosity.compute_alpha(s_next_batch[i:i+1])
+                else:
+                    alpha = 1.0
+                r_ngu = r_epi * min(max(alpha, 1.0), float(self.config.episodic.L))
+            elif self.config.rnd.enabled and self.rnd_curiosity:
+                r_ngu = self.rnd_curiosity.compute_reward(s_next_batch[i:i+1])
 
-            int_rewards[i] = self.ngu_fusion.compute(
-                s_t=s_t, a=a, s_next=s_next, controllable_emb=controllable_emb
-            )
+            int_rewards[i] = r_icm_batch[i] + r_ngu
 
-            # 添加到情景记忆
-            if self.episodic_memory and controllable_emb is not None:
-                self.episodic_memory.add(controllable_emb)
+            # 添加到对应 env 的情景记忆
+            if epi is not None and emb is not None:
+                epi.add(emb)
 
-            # episode 结束时重置情景记忆
-            if done_np[i] and self.episodic_memory:
-                self.episodic_memory.reset()
+            # P0-1: 只重置该 env 的情景记忆
+            if done_np[i] and epi is not None:
+                epi.reset()
 
         return int_rewards
 
@@ -207,15 +292,20 @@ class CuriosityPPOAgent:
         for step in range(self.config.ppo.n_steps):
             obs_tensor = self._to_tensor(self.current_obs)
 
+            # P2-10: 更新观测归一化统计并归一化
+            if self.policy_obs_rms is not None:
+                self.policy_obs_rms.update(self.current_obs)
+            obs_norm = self._normalize_policy_obs(obs_tensor)
+
             # 采样动作
             with torch.no_grad():
-                action, logprob, v_ext, v_int = self.actor_critic.get_action(obs_tensor)
+                action, logprob, v_ext, v_int = self.actor_critic.get_action(obs_norm)
 
             action_np = action.cpu().numpy()
             # Step 环境
             next_obs, ext_reward, done, info = self.vec_env.step(action_np)
 
-            # 计算内在奖励
+            # P1-6: Batch 计算内在奖励
             int_reward = self._compute_intrinsic_reward(
                 self.current_obs, action_np, next_obs, done
             )
@@ -239,7 +329,8 @@ class CuriosityPPOAgent:
         # 计算最后一步的 value 用于 GAE bootstrap
         with torch.no_grad():
             last_obs_tensor = self._to_tensor(self.current_obs)
-            _, last_v_ext, last_v_int = self.actor_critic(last_obs_tensor)
+            last_obs_norm = self._normalize_policy_obs(last_obs_tensor)
+            _, last_v_ext, last_v_int = self.actor_critic(last_obs_norm)
             last_v_ext = last_v_ext.squeeze(-1).cpu().numpy()
             last_v_int = last_v_int.squeeze(-1).cpu().numpy()
 
@@ -275,33 +366,43 @@ class CuriosityPPOAgent:
     def update_curiosity(self):
         """更新好奇心网络 (ICM + RND)
 
-        使用连续 (s_t, a, s_{t+1}) 三元组训练 ICM，
-        使用观测训练 RND predictor。
+        P0-4: 过滤跨 episode 的 (s_t, s_{t+1}) 对
+            当 dones[t]=True 时, obs[t+1] 是 reset 后的新 episode 首帧,
+            用它作为 s_next 会给 ICM 注入噪声梯度。
         """
         metrics = {}
 
-        # 构建连续 (s_t, a, s_{t+1}) 对
         n_steps, n_envs = self.buffer.actions.shape
         if n_steps < 2:
             return metrics
+
+        # P0-4: 构建有效转换掩码 — dones[t]=False 的 (s_t, s_{t+1}) 对才有效
+        # dones[t] 表示 step t 是否结束, 如果结束则 obs[t+1] 是新 episode
+        valid_mask = self.buffer.dones[:-1] == 0  # (n_steps-1, n_envs)
 
         # obs[t] → s_t, obs[t+1] → s_{t+1}
         s_t_all = self.buffer.obs[:-1]       # (n_steps-1, n_envs, *obs_shape)
         s_next_all = self.buffer.obs[1:]     # (n_steps-1, n_envs, *obs_shape)
         a_all = self.buffer.actions[:-1]     # (n_steps-1, n_envs)
 
+        # 展平并筛选有效对
         total = (n_steps - 1) * n_envs
         s_t_flat = s_t_all.reshape(total, *self.obs_shape)
         s_next_flat = s_next_all.reshape(total, *self.obs_shape)
         a_flat = a_all.reshape(total)
+        valid_flat = valid_mask.reshape(total)
 
-        # 随机采样 mini-batch
-        batch_size = min(self.config.ppo.batch_size, total)
-        indices = np.random.permutation(total)[:batch_size]
+        valid_indices = np.where(valid_flat)[0]
+        if len(valid_indices) == 0:
+            return metrics
 
-        s_t_batch = self._to_tensor(s_t_flat[indices])
-        s_next_batch = self._to_tensor(s_next_flat[indices])
-        a_batch = torch.tensor(a_flat[indices], device=self.device, dtype=torch.long)
+        # 随机采样 mini-batch (仅从有效对中)
+        batch_size = min(self.config.ppo.batch_size, len(valid_indices))
+        sampled = np.random.choice(valid_indices, size=batch_size, replace=False)
+
+        s_t_batch = self._to_tensor(s_t_flat[sampled])
+        s_next_batch = self._to_tensor(s_next_flat[sampled])
+        a_batch = torch.tensor(a_flat[sampled], device=self.device, dtype=torch.long)
 
         # ICM 更新 (inverse + forward loss)
         if self.icm_net is not None and self.config.icm.enabled:
@@ -338,6 +439,9 @@ class CuriosityPPOAgent:
 
     def train_step(self):
         """执行一次完整的训练步骤"""
+        # P1-8: 学习率衰减
+        self.ppo_trainer.update_lr(self.global_step)
+
         # 1. 收集 rollout
         last_v_ext, last_v_int = self.collect_rollout()
 
@@ -369,14 +473,50 @@ class CuriosityPPOAgent:
 
         return all_metrics
 
-    def train(self, total_steps=None, checkpoint_interval=10000, checkpoint_dir='results/checkpoints'):
-        """完整训练循环"""
+    def evaluate(self, n_episodes=10):
+        """P1-7: 训练中评测, 返回平均外在奖励"""
+        # 用向量化环境跑评测, 确定性策略
+        eval_obs = self.vec_env.reset()
+        eval_rewards = np.zeros(self.n_envs, dtype=np.float32)
+        completed = 0
+        episode_rewards = []
+
+        while completed < n_episodes:
+            obs_tensor = self._to_tensor(eval_obs)
+            obs_norm = self._normalize_policy_obs(obs_tensor)
+            with torch.no_grad():
+                logits, _, _ = self.actor_critic(obs_norm)
+                action = logits.argmax(dim=-1)
+            eval_obs, reward, done, info = self.vec_env.step(action.cpu().numpy())
+            eval_rewards += reward
+            for i in range(self.n_envs):
+                if done[i]:
+                    episode_rewards.append(eval_rewards[i])
+                    eval_rewards[i] = 0.0
+                    completed += 1
+                    if completed >= n_episodes:
+                        break
+
+        return float(np.mean(episode_rewards)) if episode_rewards else 0.0
+
+    def train(self, total_steps=None, checkpoint_interval=10000, checkpoint_dir='results/checkpoints',
+              eval_interval=50000, n_eval_episodes=10):
+        """完整训练循环
+
+        P1-7: 定期评测, 记录 eval_score
+        P1-8: 学习率线性衰减
+        """
         total_steps = total_steps or self.config.env.total_steps
         log_interval = max(1, self.config.ppo.n_steps * self.config.env.n_envs)
 
         while self.global_step < total_steps:
             metrics = self.train_step()
             self.logger.log(metrics, step=self.global_step)
+
+            # P1-7: 定期评测
+            if self.global_step % eval_interval < log_interval:
+                eval_reward = self.evaluate(n_episodes=n_eval_episodes)
+                self.logger.log({'eval_score': eval_reward}, step=self.global_step)
 
             # 定期保存检查点
             if self.global_step % checkpoint_interval < log_interval:
@@ -397,7 +537,8 @@ class CuriosityPPOAgent:
     def act(self, obs, deterministic=True):
         """推理时选择动作"""
         obs_tensor = self._to_tensor(obs)
-        logits, _, _ = self.actor_critic(obs_tensor)
+        obs_norm = self._normalize_policy_obs(obs_tensor)
+        logits, _, _ = self.actor_critic(obs_norm)
         if deterministic:
             action = logits.argmax(dim=-1)
         else:

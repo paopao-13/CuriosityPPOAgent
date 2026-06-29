@@ -1,6 +1,6 @@
 """Intrinsic Curiosity Module (ICM).
 
-- encoder: CrafterEncoder, 将观测编码为特征 phi (默认 288 维).
+- encoder: 可配置 (CrafterEncoder 或 NatureDQNEncoder), 将观测编码为特征 phi.
 - inverse_model: 由 (phi_t, phi_next) 预测动作 a, 用 cross_entropy 监督.
 - forward_model: 由 (phi_t, a_onehot) 预测 phi_next, 用 MSE 监督.
 - 前向预测误差用作内在奖励; phi_t 作为情景记忆的 controllable embedding.
@@ -9,17 +9,18 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .encoders import CrafterEncoder
+from .encoders import CrafterEncoder, NatureDQNEncoder
 
 
 class ICMNet(nn.Module):
     """ICM 好奇心模块.
 
     Args:
-        in_channels: 观测通道数 (Crafter 通常为 3).
-        action_dim: 离散动作数 (Crafter 为 17).
+        in_channels: 观测通道数.
+        action_dim: 离散动作数.
         feature_dim: encoder 输出特征维度 (默认 288).
         hidden_dim: 逆/前向模型的隐藏层维度 (默认 256).
+        encoder_cls: 编码器类, CrafterEncoder (64×64) 或 NatureDQNEncoder (84×84).
     """
 
     def __init__(
@@ -28,12 +29,15 @@ class ICMNet(nn.Module):
         action_dim: int = 17,
         feature_dim: int = 288,
         hidden_dim: int = 256,
+        encoder_cls=None,
     ):
         super().__init__()
         self.action_dim = action_dim
         self.feature_dim = feature_dim
 
-        self.encoder = CrafterEncoder(in_channels=in_channels, out_dim=feature_dim)
+        if encoder_cls is None:
+            encoder_cls = CrafterEncoder
+        self.encoder = encoder_cls(in_channels=in_channels, out_dim=feature_dim)
 
         # 逆模型: cat(phi_t, phi_next) -> action_logits
         self.inverse_model = nn.Sequential(
@@ -73,7 +77,9 @@ class ICMNet(nn.Module):
         a_onehot = F.one_hot(a, num_classes=self.action_dim).to(phi_t.dtype)
         phi_next_pred = self.forward_model(torch.cat([phi_t, a_onehot], dim=-1))
         # detach phi_next: 前向损失只通过 phi_t 反传, 不更新 encoder 去拟合 phi_next
-        forward_loss = F.mse_loss(phi_next_pred, phi_next.detach()) * self.feature_dim
+        # 不再乘 feature_dim: mse_loss 已对特征维度取均值, 乘 feature_dim 会导致
+        # forward_loss >> inverse_loss, 编码器过度偏向前向预测而弱化可控性过滤
+        forward_loss = F.mse_loss(phi_next_pred, phi_next.detach())
 
         return inverse_loss, forward_loss, phi_t
 

@@ -1,4 +1,4 @@
-"""PPO 训练器: 双价值头 + AMP + 梯度累积."""
+"""PPO 训练器: 双价值头 + AMP + 梯度累积 + 学习率衰减."""
 import numpy as np
 import torch
 import torch.nn as nn
@@ -11,12 +11,15 @@ from curiosity_ppo.utils.amp import AMPManager
 class PPOTrainer:
     """PPO 训练器：双价值头 + AMP + 梯度累积"""
 
-    def __init__(self, actor_critic, config, device='cpu', amp_manager=None, obs_preprocess=None):
+    def __init__(self, actor_critic, config, device='cpu', amp_manager=None, obs_preprocess=None,
+                 total_steps=1_000_000):
         self.actor_critic = actor_critic.to(device)
         self.config = config
         self.device = device
         self.amp = amp_manager or AMPManager(enabled=config.use_amp, device=device)
         self.optimizer = torch.optim.Adam(actor_critic.parameters(), lr=config.ppo.lr)
+        self.initial_lr = config.ppo.lr
+        self.total_steps = total_steps
         self.batch_size = config.ppo.batch_size
         self.accumulation_steps = config.ppo.accumulation_steps
         self.ppo_epochs = config.ppo.ppo_epochs
@@ -25,6 +28,12 @@ class PPOTrainer:
         self.vf_coef = config.ppo.vf_coef
         self.max_grad_norm = config.ppo.max_grad_norm
         self.obs_preprocess = obs_preprocess
+
+    def update_lr(self, current_step):
+        """线性学习率衰减到 0"""
+        frac = max(0.0, 1.0 - current_step / self.total_steps)
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = self.initial_lr * frac
 
     def update(self, buffer: RolloutBuffer):
         """执行 PPO 更新，返回训练指标 dict"""
@@ -48,9 +57,15 @@ class PPOTrainer:
 
                     # PPO ratio
                     ratio = torch.exp(logprobs - batch['logprobs'])
-                    # 合并双轨优势
-                    advantages = batch['advantages_ext'] + batch['advantages_int']
-                    advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
+                    # P1-5: 双轨优势分别归一化后合并
+                    # ext 用 gamma=0.999, int 用 gamma=0.99, 尺度差异大
+                    # 分别归一化确保两路信号都不被对方淹没
+                    adv_ext = batch['advantages_ext']
+                    adv_int = batch['advantages_int']
+                    adv_ext = (adv_ext - adv_ext.mean()) / (adv_ext.std() + 1e-8)
+                    adv_int = (adv_int - adv_int.mean()) / (adv_int.std() + 1e-8)
+                    advantages = adv_ext + adv_int
 
                     # PPO clipped objective
                     surr1 = ratio * advantages
@@ -67,6 +82,7 @@ class PPOTrainer:
 
                 self.amp.scale_loss(loss).backward()
 
+                # P0-3: 梯度累积 — 整除时 step, 循环结束后 flush 剩余梯度
                 if (step + 1) % self.accumulation_steps == 0:
                     if self.max_grad_norm > 0:
                         self.amp.unscale_(self.optimizer)
@@ -80,6 +96,14 @@ class PPOTrainer:
                 metrics['entropy'] += entropy.item()
                 metrics['clip_fraction'] += clip_fraction.item()
                 total_batches += 1
+
+            # P0-3: 每个 epoch 结束后 flush 未被 step 的残余梯度
+            if total_batches % self.accumulation_steps != 0:
+                if self.max_grad_norm > 0:
+                    self.amp.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
+                self.amp.step(self.optimizer)
+                self.optimizer.zero_grad()
 
         for k in ['policy_loss', 'value_ext_loss', 'value_int_loss', 'entropy', 'clip_fraction']:
             metrics[k] /= max(total_batches, 1)

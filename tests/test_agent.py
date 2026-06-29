@@ -60,7 +60,7 @@ def test_agent_init():
     assert agent.actor_critic is not None
     assert agent.icm_net is not None
     assert agent.rnd_net is not None
-    assert agent.episodic_memory is not None
+    assert agent.episodic_memories is not None
     assert agent.ngu_fusion is not None
 
 

@@ -30,7 +30,8 @@ class NGUFusion:
         self.rnd = rnd
         self.episodic = episodic
 
-    def compute(self, s_t=None, a=None, s_next=None, controllable_emb=None) -> float:
+    def compute(self, s_t=None, a=None, s_next=None, controllable_emb=None,
+                episodic_override=None) -> float:
         """计算融合后的内在奖励.
 
         Args:
@@ -38,10 +39,14 @@ class NGUFusion:
             a: 动作 (传给 ICM).
             s_next: 下一观测 (传给 ICM / RND).
             controllable_emb: 可控性嵌入 (传给 episodic).
+            episodic_override: 可选的 EpisodicMemory 实例, 用于多环境隔离.
+                若为 None 则使用构造时传入的 self.episodic.
 
         Returns:
             float 融合内在奖励.
         """
+        episodic = episodic_override if episodic_override is not None else self.episodic
+
         # ICM 前向损失好奇心 (短时程)
         if self.config.icm.enabled and self.icm and s_t is not None:
             r_icm = self.icm.compute_reward(s_t, a, s_next)
@@ -49,8 +54,8 @@ class NGUFusion:
             r_icm = 0.0
 
         # Episodic + RND 融合 (NGU)
-        if self.config.episodic.enabled and self.episodic and controllable_emb is not None:
-            r_epi = self.episodic.compute_reward(controllable_emb)
+        if self.config.episodic.enabled and episodic and controllable_emb is not None:
+            r_epi = episodic.compute_reward(controllable_emb)
             if self.config.rnd.enabled and self.rnd and s_next is not None:
                 alpha = self.rnd.compute_alpha(s_next)
             else:
