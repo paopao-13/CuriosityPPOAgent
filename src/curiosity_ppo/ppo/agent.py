@@ -473,15 +473,21 @@ class CuriosityPPOAgent:
 
         return all_metrics
 
-    def evaluate(self, n_episodes=10):
-        """P1-7: 训练中评测, 返回平均外在奖励"""
+    def evaluate(self, n_episodes=10, max_steps=10000):
+        """P1-7: 训练中评测, 返回平均外在奖励
+
+        Args:
+            n_episodes: 评测 episode 数量.
+            max_steps: 最大评测步数上限, 防止无限循环.
+        """
         # 用向量化环境跑评测, 确定性策略
         eval_obs = self.vec_env.reset()
         eval_rewards = np.zeros(self.n_envs, dtype=np.float32)
         completed = 0
         episode_rewards = []
+        step_count = 0
 
-        while completed < n_episodes:
+        while completed < n_episodes and step_count < max_steps:
             obs_tensor = self._to_tensor(eval_obs)
             obs_norm = self._normalize_policy_obs(obs_tensor)
             with torch.no_grad():
@@ -489,6 +495,7 @@ class CuriosityPPOAgent:
                 action = logits.argmax(dim=-1)
             eval_obs, reward, done, info = self.vec_env.step(action.cpu().numpy())
             eval_rewards += reward
+            step_count += 1
             for i in range(self.n_envs):
                 if done[i]:
                     episode_rewards.append(eval_rewards[i])
