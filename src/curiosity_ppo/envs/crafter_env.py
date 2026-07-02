@@ -34,9 +34,11 @@ def make_crafter_env(n_envs=8, seed=42):
     """
     def make_env(rank):
         def _thunk():
-            import gym  # Crafter 注册在旧版 gym 上
+            import crafter  # noqa: F401
 
-            env = gym.make("CrafterReward-v1")
+            # 直接创建 Crafter Env, 绕过 gym.make 的 TimeLimit/OrderEnforcing 等
+            # wrapper — 这些 wrapper 期望新版 5-value step API, 但 Crafter 返回 4-value
+            env = crafter.Env(reward=True)
             env = GymCompatWrapper(env)
             env = ObsToFloat32(env)
             _seed_env(env, seed + rank)

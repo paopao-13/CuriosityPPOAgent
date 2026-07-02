@@ -1,43 +1,148 @@
-# Python
+===== FILE: ./.gitignore =====
+# ============================================================
+# CuriosityPPOAgent — Industrial-Grade Python .gitignore
+# ============================================================
+
+# ---- Python 字节码与缓存 ----
 __pycache__/
+*.py[cod]
+*$py.class
 *.pyc
 *.pyo
-*.egg-info/
-dist/
-build/
-.eggs/
 
-# Virtual env
+# ---- 测试与覆盖率 ----
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# ---- 虚拟环境 ----
 .venv/
 venv/
 env/
+ENV/
+env.bak/
+venv.bak/
 
-# IDE
+# ---- 分发包与构建 ----
+*.egg-info/
+*.egg
+.eggs/
+dist/
+build/
+sdist/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.manifest
+*.spec
+
+# ---- 环境变量与密钥 ----
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# ---- Jupyter Notebook 检查点 ----
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
+
+# ---- 类型检查与 lint 缓存 ----
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+.ruff_cache/
+
+# ---- 实验追踪 ----
+wandb/
+wandb_debug/
+mlruns/
+mlartifacts/
+
+# ---- 训练结果与模型权重 (大文件) ----
+results/checkpoints/**/*.pt
+results/checkpoints/**/*.pth
+results/checkpoints/**/*.ckpt
+results/onnx/**/*.onnx
+results/videos/
+results/logs/
+results/ablation/
+results/eval/
+*.safetensors
+*.pt
+*.pth
+*.ckpt
+*.onnx
+
+# ---- 日志文件 ----
+*.log
+logs/
+*.log.*
+
+# ---- PyTorch 缓存 ----
+.torch/
+
+# ---- 压缩包 ----
+*.tar.gz
+*.tar
+*.zip
+*.gz
+*.tgz
+*.7z
+*.rar
+
+# ---- 操作系统 ----
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ---- IDE 配置 ----
 .vscode/
 .idea/
 *.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
 
-# Test
-.pytest_cache/
-.coverage
-htmlcov/
-
-# Results (大文件)
-results/checkpoints/*.pt
-results/videos/*.mp4
-results/logs/
-results/onnx/*.onnx
-
-# Wandb
-wandb/
-
-# IGA Pages
-.iga/
-
-# Node
+# ---- Node.js / Web Demo ----
+node_modules/
 web/node_modules/
 web/dist/
+web/.vite/
+web/.turbo/
+web/stats.html
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
 
-# OS
-Thumbs.db
-.DS_Store
+# ---- IGA Pages ----
+.iga/
+
+# ---- 其他 ----
+*.bak
+*.tmp
+*.temp
+.cache/
+*.pid
+*.seed
+*.pid.lock

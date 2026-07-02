@@ -30,6 +30,15 @@ class GymCompatWrapper(gymnasium.Wrapper):
         self._cached_spec = None
 
     def reset(self, **kwargs):
+        # 拦截 gymnasium 传递的 seed / options 关键字
+        # 旧 gym 的 reset() 不接受这些参数，需用 env.seed() 设置种子
+        seed = kwargs.pop('seed', None)
+        kwargs.pop('options', None)
+        if seed is not None:
+            try:
+                self.env.seed(seed)
+            except Exception:
+                pass
         result = self.env.reset(**kwargs)
         if isinstance(result, tuple):
             return result
