@@ -1,7 +1,4 @@
-===== FILE: ./.gitignore =====
-# ============================================================
-# CuriosityPPOAgent — Industrial-Grade Python .gitignore
-# ============================================================
+# Python .gitignore
 
 # ---- Python 字节码与缓存 ----
 __pycache__/

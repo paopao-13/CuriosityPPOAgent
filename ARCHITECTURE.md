@@ -353,9 +353,12 @@ PPO 更新时, 双轨优势相加后归一化:
 ```python
 # src/curiosity_ppo/ppo/ppo_trainer.py
 
-# 合并双轨优势
-advantages = batch['advantages_ext'] + batch['advantages_int']
-advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+# 双轨优势分别归一化后合并
+# ext 用 gamma=0.999, int 用 gamma=0.99, 尺度差异大
+# 分别归一化确保两路信号都不被对方淹没
+adv_ext = (adv_ext - adv_ext.mean()) / (adv_ext.std() + 1e-8)
+adv_int = (adv_int - adv_int.mean()) / (adv_int.std() + 1e-8)
+advantages = adv_ext + adv_int
 
 # PPO clipped objective
 ratio = torch.exp(logprobs_new - logprobs_old)

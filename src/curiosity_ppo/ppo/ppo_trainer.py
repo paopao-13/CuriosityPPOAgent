@@ -58,7 +58,7 @@ class PPOTrainer:
                     # PPO ratio
                     ratio = torch.exp(logprobs - batch['logprobs'])
 
-                    # P1-5: 双轨优势分别归一化后合并
+                    # 双轨优势分别归一化后合并
                     # ext 用 gamma=0.999, int 用 gamma=0.99, 尺度差异大
                     # 分别归一化确保两路信号都不被对方淹没
                     adv_ext = batch['advantages_ext']
@@ -82,7 +82,7 @@ class PPOTrainer:
 
                 self.amp.scale_loss(loss).backward()
 
-                # P0-3: 梯度累积 — 整除时 step, 循环结束后 flush 剩余梯度
+                # 梯度累积 — 整除时 step, 循环结束后 flush 剩余梯度
                 if (step + 1) % self.accumulation_steps == 0:
                     if self.max_grad_norm > 0:
                         self.amp.unscale_(self.optimizer)
@@ -97,7 +97,7 @@ class PPOTrainer:
                 metrics['clip_fraction'] += clip_fraction.item()
                 total_batches += 1
 
-            # P0-3: 每个 epoch 结束后 flush 未被 step 的残余梯度
+            # 每个 epoch 结束后 flush 未被 step 的残余梯度
             if total_batches % self.accumulation_steps != 0:
                 if self.max_grad_norm > 0:
                     self.amp.unscale_(self.optimizer)

@@ -2,15 +2,6 @@
 
 集成环境、网络、好奇心模块、PPO 训练器，实现完整训练循环:
 collect_rollout → compute_gae → ppo_update + curiosity_update → log → checkpoint
-
-修复记录:
-- P0-1: 每个 env 独立 EpisodicMemory, 避免全局清空
-- P0-2: ICM 编码器支持 NatureDQNEncoder, 兼容 Atari 84×84
-- P0-4: 过滤跨 episode ICM 训练对, 避免噪声梯度
-- P1-6: 内在奖励 batch 计算, 8 倍性能提升
-- P1-7: 训练中定期评测, 产生 eval_score 指标
-- P1-8: 学习率线性衰减集成
-- P2-10: 策略网络观测归一化 (RunningMeanStd)
 """
 import numpy as np
 import torch
@@ -89,7 +80,7 @@ class CuriosityPPOAgent:
             rnd_encoder_cls = NatureDQNEncoder
             icm_encoder_cls = NatureDQNEncoder
 
-        # P2-10: 策略网络观测归一化 (RunningMeanStd, 在线更新)
+        # 策略网络观测归一化 (RunningMeanStd, 在线更新)
         self.policy_obs_rms = RunningMeanStd(shape=obs_shape) if self.is_image else None
 
         # Actor-Critic (双价值头)
@@ -130,7 +121,7 @@ class CuriosityPPOAgent:
         self.rnd_optimizer = None
 
         if config.icm.enabled:
-            # P0-2: ICM 编码器与环境匹配
+            # ICM 编码器与环境匹配
             self.icm_net = ICMNet(
                 in_channels=self.in_channels,
                 action_dim=n_actions,
@@ -157,7 +148,7 @@ class CuriosityPPOAgent:
             )
             self.rnd_optimizer = torch.optim.Adam(self.rnd_net.predictor.parameters(), lr=config.ppo.lr)
 
-        # P0-1: 每个 env 独立的 EpisodicMemory
+        # 每个 env 独立的 EpisodicMemory
         # 嵌入维度: ICM 启用时用 ICM feature_dim, 否则用 RND output_dim
         if config.icm.enabled:
             episodic_dim = config.icm.feature_dim
@@ -213,7 +204,7 @@ class CuriosityPPOAgent:
         return t
 
     def _normalize_policy_obs(self, obs_tensor):
-        """P2-10: 策略网络观测归一化 (CHW 格式)"""
+        """策略网络观测归一化 (CHW 格式)"""
         if self.policy_obs_rms is None:
             return obs_tensor
         mean = torch.tensor(self.policy_obs_rms.mean, device=obs_tensor.device, dtype=obs_tensor.dtype)
@@ -225,9 +216,9 @@ class CuriosityPPOAgent:
         return (obs_tensor - mean) / (std + 1e-8)
 
     def _compute_intrinsic_reward(self, obs_np, action_np, next_obs_np, done_np):
-        """P1-6: Batch 计算内在奖励 (一次前向所有 env)
+        """Batch 计算内在奖励 (一次前向所有 env)
 
-        P0-1: 每个 env 使用独立的 EpisodicMemory
+        每个 env 使用独立的 EpisodicMemory
         """
         n_envs = obs_np.shape[0]
         int_rewards = np.zeros(n_envs, dtype=np.float32)
@@ -277,7 +268,7 @@ class CuriosityPPOAgent:
             if epi is not None and emb is not None:
                 epi.add(emb)
 
-            # P0-1: 只重置该 env 的情景记忆
+            # 只重置该 env 的情景记忆
             if done_np[i] and epi is not None:
                 epi.reset()
 
@@ -292,7 +283,7 @@ class CuriosityPPOAgent:
         for step in range(self.config.ppo.n_steps):
             obs_tensor = self._to_tensor(self.current_obs)
 
-            # P2-10: 更新观测归一化统计并归一化
+            # 更新观测归一化统计并归一化
             if self.policy_obs_rms is not None:
                 self.policy_obs_rms.update(self.current_obs)
             obs_norm = self._normalize_policy_obs(obs_tensor)
@@ -305,7 +296,7 @@ class CuriosityPPOAgent:
             # Step 环境
             next_obs, ext_reward, done, info = self.vec_env.step(action_np)
 
-            # P1-6: Batch 计算内在奖励
+            # Batch 计算内在奖励
             int_reward = self._compute_intrinsic_reward(
                 self.current_obs, action_np, next_obs, done
             )
@@ -366,7 +357,7 @@ class CuriosityPPOAgent:
     def update_curiosity(self):
         """更新好奇心网络 (ICM + RND)
 
-        P0-4: 过滤跨 episode 的 (s_t, s_{t+1}) 对
+        过滤跨 episode 的 (s_t, s_{t+1}) 对:
             当 dones[t]=True 时, obs[t+1] 是 reset 后的新 episode 首帧,
             用它作为 s_next 会给 ICM 注入噪声梯度。
         """
@@ -376,7 +367,7 @@ class CuriosityPPOAgent:
         if n_steps < 2:
             return metrics
 
-        # P0-4: 构建有效转换掩码 — dones[t]=False 的 (s_t, s_{t+1}) 对才有效
+        # 构建有效转换掩码 — dones[t]=False 的 (s_t, s_{t+1}) 对才有效
         # dones[t] 表示 step t 是否结束, 如果结束则 obs[t+1] 是新 episode
         valid_mask = self.buffer.dones[:-1] == 0  # (n_steps-1, n_envs)
 
@@ -439,7 +430,7 @@ class CuriosityPPOAgent:
 
     def train_step(self):
         """执行一次完整的训练步骤"""
-        # P1-8: 学习率衰减
+        # 学习率衰减
         self.ppo_trainer.update_lr(self.global_step)
 
         # 1. 收集 rollout
@@ -474,7 +465,7 @@ class CuriosityPPOAgent:
         return all_metrics
 
     def evaluate(self, n_episodes=10, max_steps=10000):
-        """P1-7: 训练中评测, 返回平均外在奖励
+        """训练中评测, 返回平均外在奖励
 
         Args:
             n_episodes: 评测 episode 数量.
@@ -510,8 +501,8 @@ class CuriosityPPOAgent:
               eval_interval=50000, n_eval_episodes=10):
         """完整训练循环
 
-        P1-7: 定期评测, 记录 eval_score
-        P1-8: 学习率线性衰减
+        定期评测, 记录 eval_score
+        学习率线性衰减
         """
         total_steps = total_steps or self.config.env.total_steps
         log_interval = max(1, self.config.ppo.n_steps * self.config.env.n_envs)
@@ -520,7 +511,7 @@ class CuriosityPPOAgent:
             metrics = self.train_step()
             self.logger.log(metrics, step=self.global_step)
 
-            # P1-7: 定期评测
+            # 定期评测
             if self.global_step % eval_interval < log_interval:
                 eval_reward = self.evaluate(n_episodes=n_eval_episodes)
                 self.logger.log({'eval_score': eval_reward}, step=self.global_step)

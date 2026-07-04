@@ -1,6 +1,6 @@
 """LRU 内存库 (CPU), 用于情景记忆的 kNN 搜索.
 
-P2-9: 预分配 numpy 数组, 避免 knn_distances 每次调用 np.stack 重建.
+预分配 numpy 数组, 避免 knn_distances 每次调用 np.stack 重建.
 使用环形缓冲区管理 FIFO 淘汰, write_ptr 循环写入.
 """
 import numpy as np
@@ -17,7 +17,7 @@ class LRUMemoryBank:
     def __init__(self, capacity: int = 10000, dim: int = 512):
         self.capacity = capacity
         self.dim = dim
-        # P2-9: 预分配数组, 避免每次 knn_distances 调用 np.stack
+        # 预分配数组, 避免每次 knn_distances 调用 np.stack
         self._data = np.zeros((capacity, dim), dtype=np.float32)
         self._size = 0
         self._write_ptr = 0  # 环形缓冲区写指针
@@ -41,7 +41,7 @@ class LRUMemoryBank:
     def knn_distances(self, query: np.ndarray, k: int = 5) -> np.ndarray:
         """numpy 暴力 L2 距离, 返回 k 个最近邻距离 (升序).
 
-        P2-9: 直接使用预分配数组的视图, 无需 np.stack 重建.
+        直接使用预分配数组的视图, 无需 np.stack 重建.
 
         Args:
             query: (dim,) 查询向量.
