@@ -51,6 +51,7 @@ class EnvConfig:
     name: str = "crafter"
     n_envs: int = 8
     total_steps: int = 1000000
+    vec_env_type: str = "dummy"  # "dummy" | "subproc"
 
 
 @dataclass
@@ -62,6 +63,7 @@ class Config:
     env: EnvConfig = field(default_factory=EnvConfig)
     ablation: str = "full"
     use_amp: bool = True
+    use_compile: bool = False  # torch.compile 网络 (数学等价提速, 零数据改动)
     seed: int = 42
     wandb_project: str = "curiosity-ppo"
 

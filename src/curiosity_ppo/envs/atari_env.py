@@ -8,7 +8,7 @@ import gymnasium
 from gymnasium import spaces
 
 from curiosity_ppo.envs.wrappers import FrameStack, GrayResizeObservation
-from curiosity_ppo.envs.vec_env import DummyVecEnv
+from curiosity_ppo.envs.vec_env import DummyVecEnv, SubprocVecEnv
 
 __all__ = [
     "make_atari_env",
@@ -110,31 +110,35 @@ class ClipReward(gymnasium.Wrapper):
 # =========================================================================
 
 
-def make_atari_env(env_id="ALE/MontezumaRevenge-v5", n_envs=8, seed=42):
+def _build_single_atari(env_id, seed, rank):
+    """构建单个 Atari 子环境 (spawn-safe: 顶层函数 + 显式参数)。"""
+    import ale_py  # noqa: F401  注册 ALE 环境
+
+    env = gymnasium.make(env_id)
+    env = NoopReset(env, noop_max=30)
+    env = MaxAndSkip(env, skip=4)
+    env = EpisodicLife(env)
+    env = GrayResizeObservation(env, size=84)
+    env = FrameStack(env, k=4)
+    env = ClipReward(env)
+    env.reset(seed=seed + rank)
+    return env
+
+
+def make_atari_env(env_id="ALE/MontezumaRevenge-v5", n_envs=8, seed=42, vec_env_type="dummy"):
     """创建 Atari 向量化环境。
 
     Args:
         env_id: gymnasium Atari 环境 ID。
         n_envs: 并行环境数量。
         seed: 基础随机种子，各子环境使用 seed + rank。
+        vec_env_type: "dummy"(串行) 或 "subproc"(多进程并行, 单卡提速)。
 
     Returns:
-        DummyVecEnv: 观测为 (4, 84, 84) 堆叠灰度图的向量化环境。
+        VecEnv: 观测为 (4, 84, 84) 堆叠灰度图的向量化环境。
     """
-    def make_env(rank):
-        def _thunk():
-            import ale_py  # noqa: F401  注册 ALE 环境
-
-            env = gymnasium.make(env_id)
-            env = NoopReset(env, noop_max=30)
-            env = MaxAndSkip(env, skip=4)
-            env = EpisodicLife(env)
-            env = GrayResizeObservation(env, size=84)
-            env = FrameStack(env, k=4)
-            env = ClipReward(env)
-            env.reset(seed=seed + rank)
-            return env
-
-        return _thunk
-
-    return DummyVecEnv([make_env(i) for i in range(n_envs)])
+    fns = [(_build_single_atari, (env_id, seed, i), {}) for i in range(n_envs)]
+    if vec_env_type == "subproc":
+        return SubprocVecEnv(fns)
+    # Dummy: 同进程, lambda 闭包无需 pickle
+    return DummyVecEnv([(lambda i=i: _build_single_atari(env_id, seed, i)) for i in range(n_envs)])

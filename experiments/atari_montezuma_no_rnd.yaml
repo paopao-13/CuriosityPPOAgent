@@ -1,4 +1,5 @@
-# 消融实验: 无 Episodic Memory (验证短期记忆的独立增益)
+# Atari Montezuma's Revenge 消融: 去掉 RND
+# 退化行为: alpha_t 固定为 1, NGU 退化为纯情景奖励, 无长期调制
 ppo:
   lr: 1.0e-4
   clip_range: 0.1
@@ -6,7 +7,7 @@ ppo:
   gamma_ext: 0.999
   gamma_int: 0.99
   gae_lambda: 0.95
-  ent_coef: 0.01
+  ent_coef: 0.02
   vf_coef: 0.5
   max_grad_norm: 0.5
   batch_size: 128
@@ -15,7 +16,7 @@ ppo:
   n_envs: 8
 
 rnd:
-  enabled: true
+  enabled: false
   output_dim: 512
   predictor_hidden: 512
   obs_normalize: true
@@ -28,18 +29,18 @@ icm:
   hidden_dim: 256
 
 episodic:
-  enabled: false
+  enabled: true
   k: 5
   epsilon: 1.0e-3
   L: 5
   capacity: 10000
 
 env:
-  name: crafter
+  name: atari_montezuma
   n_envs: 8
-  total_steps: 1000000
+  total_steps: 10000000
 
-ablation: no_episodic
+ablation: no_rnd
 use_amp: true
 seed: 42
 wandb_project: curiosity-ppo

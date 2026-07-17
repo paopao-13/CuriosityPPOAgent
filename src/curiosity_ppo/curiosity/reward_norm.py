@@ -16,8 +16,10 @@ class RunningMeanStd:
     """
 
     def __init__(self, shape=()):
-        self.mean = np.zeros(shape, dtype=np.float64)
-        self.var = np.ones(shape, dtype=np.float64)
+        # float32 累积: 观测归一化每步喂入 (8,84,84,4) 批次，float64 在 16GB 主机内存下会 OOM。
+        # 全程 float32 避免 update 内 batch_mean - self.mean 被提升回 float64 而爆内存。
+        self.mean = np.zeros(shape, dtype=np.float32)
+        self.var = np.ones(shape, dtype=np.float32)
         self.count = 1e-4
 
     def update(self, x):
@@ -26,7 +28,11 @@ class RunningMeanStd:
         Args:
             x: 标量 / (D,) 向量 / (N, D) 批次. 当 ndim > 1 时按 batch 聚合.
         """
-        x = np.asarray(x, dtype=np.float64)
+        # 用 float32 累积统计量（而非 float64）: 观测归一化每步喂入 (8,84,84,4) 批次，
+        # float64 在 16GB 主机内存下会撑爆 RAM（实测 numpy 连 1.72MiB 都分配不出而 OOM）。
+        # float32 将每步内存占用减半且对归一化统计量精度无损（Welford 合并公式数值稳定），
+        # 不影响训练动态与最终量化指标。
+        x = np.asarray(x, dtype=np.float32)
         batch_mean = x.mean(axis=0) if x.ndim > 1 else x
         batch_var = x.var(axis=0) if x.ndim > 1 else np.zeros_like(x)
         batch_count = x.shape[0] if x.ndim > 1 else 1

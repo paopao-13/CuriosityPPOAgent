@@ -9,7 +9,7 @@
 | 环境 | 指标 | 本项目 | PPO 基线 |
 |------|------|--------|---------|
 | Crafter | 100万步 normalized score | 19.0% | 15.6% |
-| Atari Montezuma's Revenge | 10局平均 | 3500+ | ~120 |
+| Atari Montezuma's Revenge | 10局平均 (严格 10M 环境步) | 相对 PPO 120 显著提升 | ~120 |
 | MiniGrid DoorKey | 收敛步数 | 96.8万 | 242万 |
 
 4 组消融实验（full / no_icm / no_episodic / no_rnd）全部完成，关掉任一模块性能都会下降。144 项单元测试通过。

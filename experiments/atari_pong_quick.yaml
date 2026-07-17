@@ -1,16 +1,18 @@
-# 消融实验: 无 Episodic Memory (验证短期记忆的独立增益)
+# Atari Pong 轻量配置 (免费 GPU: Kaggle/Colab T4 适用)
+# 目标: 用最小成本验证 "ICM 好奇心模块 vs 纯 PPO" 的探索收益
+# Pong 稀疏奖励弱、1M 步内即可出分, 免费 T4 约 1-2 小时跑完
 ppo:
-  lr: 1.0e-4
+  lr: 2.5e-4
   clip_range: 0.1
   ppo_epochs: 4
-  gamma_ext: 0.999
+  gamma_ext: 0.99
   gamma_int: 0.99
   gae_lambda: 0.95
   ent_coef: 0.01
   vf_coef: 0.5
   max_grad_norm: 0.5
-  batch_size: 128
-  accumulation_steps: 4
+  batch_size: 256
+  accumulation_steps: 1
   n_steps: 128
   n_envs: 8
 
@@ -23,23 +25,23 @@ rnd:
 
 icm:
   enabled: true
-  feature_dim: 288
+  feature_dim: 256
   eta: 0.2
   hidden_dim: 256
 
 episodic:
-  enabled: false
+  enabled: true
   k: 5
   epsilon: 1.0e-3
   L: 5
   capacity: 10000
 
 env:
-  name: crafter
+  name: atari_pong
   n_envs: 8
   total_steps: 1000000
 
-ablation: no_episodic
-use_amp: true
+ablation: full
+use_amp: false
 seed: 42
 wandb_project: curiosity-ppo

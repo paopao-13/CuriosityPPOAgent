@@ -100,9 +100,22 @@ class DummyVecEnv:
 
 
 def _worker(remote, parent_remote, env_fn):
-    """子进程 worker：接收命令，操作环境，返回结果。"""
+    """子进程 worker：接收命令，操作环境，返回结果。
+
+    env_fn 可为:
+      - 可调用对象 (同进程 Dummy 习惯): 直接 env_fn()
+      - (func, args, kwargs) 元组: 子进程内 fn(*args, **kwargs) 重建。
+        这样 env 构造逻辑(闭包/局部变量)无需可 pickle, 只需顶层函数可 pickle,
+        兼容 Windows spawn (spawn 下闭包不可 pickle 会报错)。
+    """
     parent_remote.close()
-    env = env_fn()
+    if isinstance(env_fn, (list, tuple)):
+        fn = env_fn[0]
+        args = env_fn[1] if len(env_fn) > 1 else ()
+        kwargs = env_fn[2] if len(env_fn) > 2 else {}
+        env = fn(*args, **kwargs)
+    else:
+        env = env_fn()
     try:
         while True:
             cmd, data = remote.recv()

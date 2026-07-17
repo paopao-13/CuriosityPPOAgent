@@ -21,18 +21,19 @@ from curiosity_ppo.utils.logger import TrainLogger
 def make_env(config):
     """根据 config.env.name 创建向量化环境"""
     name = config.env.name.lower()
+    vec_type = getattr(config.env, "vec_env_type", "dummy")
     if "crafter" in name:
         from curiosity_ppo.envs.crafter_env import make_crafter_env
 
-        return make_crafter_env(n_envs=config.env.n_envs, seed=config.seed)
+        return make_crafter_env(n_envs=config.env.n_envs, seed=config.seed, vec_env_type=vec_type)
     elif "atari" in name or "montezuma" in name:
         from curiosity_ppo.envs.atari_env import make_atari_env
 
-        return make_atari_env(n_envs=config.env.n_envs, seed=config.seed)
+        return make_atari_env(n_envs=config.env.n_envs, seed=config.seed, vec_env_type=vec_type)
     elif "minigrid" in name or "doorkey" in name:
         from curiosity_ppo.envs.minigrid_env import make_minigrid_env
 
-        return make_minigrid_env(n_envs=config.env.n_envs, seed=config.seed)
+        return make_minigrid_env(n_envs=config.env.n_envs, seed=config.seed, vec_env_type=vec_type)
     else:
         raise ValueError(f"Unknown env: {name}")
 
@@ -46,11 +47,21 @@ def main():
     parser.add_argument("--run-name", type=str, default=None, help="Wandb 运行名称")
     parser.add_argument("--checkpoint-dir", type=str, default="results/checkpoints")
     parser.add_argument("--checkpoint-interval", type=int, default=10000)
+    parser.add_argument("--seed", type=int, default=None, help="随机种子 (覆盖配置, 便于多种子统计)")
+    parser.add_argument("--use-compile", action="store_true", help="启用 torch.compile 网络 (数学等价提速)")
+    parser.add_argument("--vec-env-type", type=str, default=None,
+                        help="向量化环境类型: dummy(串行) 或 subproc(多进程并行提速)")
     args = parser.parse_args()
 
     config = load_config(args.config)
     if args.total_steps:
         config.env.total_steps = args.total_steps
+    if args.seed is not None:
+        config.seed = args.seed
+    if args.use_compile:
+        config.use_compile = True
+    if args.vec_env_type is not None:
+        config.env.vec_env_type = args.vec_env_type
     set_seed(config.seed)
 
     env = make_env(config)

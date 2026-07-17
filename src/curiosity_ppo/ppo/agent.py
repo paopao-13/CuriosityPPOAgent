@@ -3,6 +3,7 @@
 集成环境、网络、好奇心模块、PPO 训练器，实现完整训练循环:
 collect_rollout → compute_gae → ppo_update + curiosity_update → log → checkpoint
 """
+import math
 import numpy as np
 import torch
 import torch.nn as nn
@@ -26,6 +27,17 @@ from curiosity_ppo.utils.vram import get_vram_usage, empty_cache
 from curiosity_ppo.utils.logger import TrainLogger
 from curiosity_ppo.utils.checkpoint import save_checkpoint
 from curiosity_ppo.utils.seed import set_seed
+import sys as _sys
+
+
+def _maybe_compile(model):
+    """torch.compile 包装 (Windows 无 Triton 时自动跳过, 零影响)。"""
+    if _sys.platform == "win32":
+        return model  # Windows: Triton 不可用, inductor 后端会在首次前向时报错
+    try:
+        return torch.compile(model)
+    except Exception:
+        return model
 
 
 class CuriosityPPOAgent:
@@ -50,6 +62,9 @@ class CuriosityPPOAgent:
 
         set_seed(config.seed)
 
+        # cuDNN 自动选择最优卷积算法 (数学等价, 零数据改动, 提速 5~15%)
+        torch.backends.cudnn.benchmark = True
+
         # 推断环境参数
         obs_shape = vec_env.observation_space.shape
         n_actions = vec_env.action_space.n
@@ -59,9 +74,14 @@ class CuriosityPPOAgent:
         self.n_envs = n_envs
 
         # 判断通道位置: gymnasium 默认 HWC, 需转为 CHW
-        if len(obs_shape) == 3:
+        # 但 Atari FrameStack(channels_first=True) 已输出 CHW (如 (4,84,84)),
+        # 其最后一维=4 <= 通道数, 不应再转置; 仅当最后一维 > 4 才视为 HWC.
+        if len(obs_shape) == 3 and obs_shape[2] <= 4:
             self.in_channels = obs_shape[2]
             self.is_image = True
+        elif len(obs_shape) == 3:
+            self.in_channels = obs_shape[0]
+            self.is_image = False
         else:
             self.in_channels = obs_shape[0]
             self.is_image = False
@@ -85,6 +105,10 @@ class CuriosityPPOAgent:
 
         # Actor-Critic (双价值头)
         self.actor_critic = ActorCritic(encoder, n_actions, embed_dim=embed_dim).to(device)
+        if config.use_compile:
+            # torch.compile: 纯计算图优化, 数学等价, 零数据改动 (提速 10~30%)
+            # Windows 无 Triton 时 _maybe_compile 自动跳过
+            self.actor_critic = _maybe_compile(self.actor_critic)
 
         # AMP
         self.amp = AMPManager(enabled=config.use_amp, device=device)
@@ -118,6 +142,7 @@ class CuriosityPPOAgent:
         self.rnd_curiosity = None
         self.ngu_fusion = None
         self.icm_optimizer = None
+        self.icm_forward_optimizer = None
         self.rnd_optimizer = None
 
         if config.icm.enabled:
@@ -129,15 +154,29 @@ class CuriosityPPOAgent:
                 hidden_dim=config.icm.hidden_dim,
                 encoder_cls=icm_encoder_cls,
             ).to(device)
+            if config.use_compile:
+                self.icm_net = _maybe_compile(self.icm_net)
             self.icm_curiosity = ICMCuriosity(self.icm_net, eta=config.icm.eta, device=device)
-            self.icm_optimizer = torch.optim.Adam(self.icm_net.parameters(), lr=config.ppo.lr)
+            # 双优化器: inverse → encoder+inverse_model, forward → forward_model only
+            self.icm_optimizer = torch.optim.Adam(
+                list(self.icm_net.encoder.parameters()) +
+                list(self.icm_net.inverse_model.parameters()),
+                lr=config.ppo.lr,
+            )
+            self.icm_forward_optimizer = torch.optim.Adam(
+                self.icm_net.forward_model.parameters(),
+                lr=config.ppo.lr,
+            )
 
         if config.rnd.enabled:
             self.rnd_net = RNDNet(
                 in_channels=self.in_channels,
                 output_dim=config.rnd.output_dim,
+                predictor_hidden=config.rnd.predictor_hidden,
                 encoder_cls=rnd_encoder_cls,
             ).to(device)
+            if config.use_compile:
+                self.rnd_net = _maybe_compile(self.rnd_net)
             rnd_obs_shape = (self.in_channels, obs_shape[0], obs_shape[1]) if self.is_image else obs_shape
             obs_normalizer = RunningMeanStd(shape=rnd_obs_shape) if config.rnd.obs_normalize else None
             self.rnd_curiosity = RNDCuriosity(
@@ -170,6 +209,9 @@ class CuriosityPPOAgent:
             ]
         else:
             self.episodic_memories = None
+
+        # 内在奖励归一化器 (防止 ICM/RND reward 爆炸 → NaN)
+        self.int_reward_normalizer = RewardNormalizer()
 
         # NGU 融合 (episodic=None, 通过 episodic_override 逐环境传入)
         self.ngu_fusion = NGUFusion(
@@ -243,7 +285,8 @@ class CuriosityPPOAgent:
             with torch.no_grad():
                 inverse_loss, forward_loss, _ = self.icm_net(s_t_batch, a_batch, s_next_batch)
                 # forward_loss 是标量 (mean over batch), 广播到每个 env
-                r_icm_batch[:] = (self.config.icm.eta * forward_loss).item()
+                raw_icm = (self.config.icm.eta * forward_loss).item()
+                r_icm_batch[:] = min(raw_icm, 10.0)  # 裁剪 ICM 原始奖励 (防爆炸)
 
         # Per-env: episodic memory + RND alpha (kNN 是 CPU numpy, 快)
         for i in range(n_envs):
@@ -272,7 +315,10 @@ class CuriosityPPOAgent:
             if done_np[i] and epi is not None:
                 epi.reset()
 
-        return int_rewards
+        # 内在奖励归一化 + 裁剪 (防止 ICM/RND 爆炸 → NaN)
+        # RewardNormalizer: reward / (running_std + 1e-8), clip 到 [-10, 10]
+        normalized = self.int_reward_normalizer(int_rewards)
+        return normalized
 
     def collect_rollout(self):
         """收集一轮 rollout 数据"""
@@ -314,6 +360,8 @@ class CuriosityPPOAgent:
             )
 
             self.current_obs = next_obs
+            # 在 rollout 的每一步 (共 n_steps 次) 累加 n_envs 个环境步,
+            # 整轮累加 = n_steps * n_envs, 即本 rollout 实际处理的环境步数。
             self.global_step += self.config.env.n_envs
             self.episode_count += int(sum(done))
 
@@ -395,18 +443,40 @@ class CuriosityPPOAgent:
         s_next_batch = self._to_tensor(s_next_flat[sampled])
         a_batch = torch.tensor(a_flat[sampled], device=self.device, dtype=torch.long)
 
-        # ICM 更新 (inverse + forward loss)
+        # ICM 更新 — 双优化器: inverse_loss → encoder + inverse_model,
+        # forward_loss → forward_model only (梯度隔离, 防编码器发散)
         if self.icm_net is not None and self.config.icm.enabled:
             with self.amp.autocast():
-                inverse_loss, forward_loss, phi_t = self.icm_net(s_t_batch, a_batch, s_next_batch)
-                icm_loss = inverse_loss + forward_loss
+                inverse_loss, forward_loss, phi_t = self.icm_net(
+                    s_t_batch, a_batch, s_next_batch,
+                    detach_phi_t_for_forward=True,
+                )
+                # forward_loss clip: 防止极端值导致梯度爆炸
+                forward_loss_clipped = torch.clamp(forward_loss, max=10.0)
 
+            # 优化器 1: inverse_loss → encoder + inverse_model (训练可控特征)
             self.icm_optimizer.zero_grad()
-            self.amp.scale_loss(icm_loss).backward()
+            self.amp.scale_loss(inverse_loss).backward(retain_graph=True)
             if self.config.ppo.max_grad_norm > 0:
                 self.amp.unscale_(self.icm_optimizer)
-                torch.nn.utils.clip_grad_norm_(self.icm_net.parameters(), self.config.ppo.max_grad_norm)
-            self.icm_optimizer.step()
+                torch.nn.utils.clip_grad_norm_(
+                    list(self.icm_net.encoder.parameters()) +
+                    list(self.icm_net.inverse_model.parameters()),
+                    self.config.ppo.max_grad_norm,
+                )
+            self.amp.step(self.icm_optimizer)
+
+            # 优化器 2: forward_loss → forward_model only (探索信号, 不影响编码器)
+            self.icm_forward_optimizer.zero_grad()
+            self.amp.scale_loss(forward_loss_clipped).backward()
+            if self.config.ppo.max_grad_norm > 0:
+                self.amp.unscale_(self.icm_forward_optimizer)
+                torch.nn.utils.clip_grad_norm_(
+                    self.icm_net.forward_model.parameters(),
+                    self.config.ppo.max_grad_norm,
+                )
+            self.amp.step(self.icm_forward_optimizer)
+            self.amp.update()
 
             metrics['icm_inverse_loss'] = inverse_loss.item()
             metrics['icm_forward_loss'] = forward_loss.item()
@@ -423,6 +493,7 @@ class CuriosityPPOAgent:
                 self.amp.unscale_(self.rnd_optimizer)
                 torch.nn.utils.clip_grad_norm_(self.rnd_net.predictor.parameters(), self.config.ppo.max_grad_norm)
             self.rnd_optimizer.step()
+            self.amp.update()  # 同上, 重置 GradScaler 状态
 
             metrics['rnd_loss'] = rnd_loss.item()
 
@@ -452,6 +523,57 @@ class CuriosityPPOAgent:
         all_metrics = {**ppo_metrics, **curiosity_metrics}
         all_metrics['global_step'] = self.global_step
         all_metrics['episode_count'] = self.episode_count
+
+        # NaN/inf 安全检测: 若任一核心 loss 为 NaN/inf, 重置好奇心网络并跳过本轮
+        nan_detected = False
+        for key in ('policy_loss', 'value_ext_loss', 'icm_forward_loss', 'rnd_loss'):
+            val = all_metrics.get(key, 0.0)
+            if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+                all_metrics[key] = 0.0
+                nan_detected = True
+
+        if nan_detected:
+            all_metrics['nan_detected'] = True
+            # 重置 buffer
+            self.buffer.reset()
+            empty_cache()
+            # 重置好奇心网络到初始状态 (防止 NaN 权重持续传播)
+            if self.icm_net is not None:
+                for layer in self.icm_net.encoder.modules():
+                    if hasattr(layer, 'reset_parameters'):
+                        layer.reset_parameters()
+                for layer in self.icm_net.inverse_model.modules():
+                    if hasattr(layer, 'reset_parameters'):
+                        layer.reset_parameters()
+                for layer in self.icm_net.forward_model.modules():
+                    if hasattr(layer, 'reset_parameters'):
+                        layer.reset_parameters()
+                # 重置 ICM 优化器状态 (旧 momentum 等已失效)
+                self.icm_optimizer = torch.optim.Adam(
+                    list(self.icm_net.encoder.parameters()) +
+                    list(self.icm_net.inverse_model.parameters()),
+                    lr=self.config.ppo.lr,
+                )
+                self.icm_forward_optimizer = torch.optim.Adam(
+                    self.icm_net.forward_model.parameters(),
+                    lr=self.config.ppo.lr,
+                )
+                # 重置内在奖励归一化器
+                self.int_reward_normalizer = RewardNormalizer()
+            if self.rnd_net is not None:
+                for layer in self.rnd_net.predictor.modules():
+                    if hasattr(layer, 'reset_parameters'):
+                        layer.reset_parameters()
+                self.rnd_optimizer = torch.optim.Adam(
+                    self.rnd_net.predictor.parameters(), lr=self.config.ppo.lr,
+                )
+            # 重置情景记忆 (旧的嵌入来自 NaN 模型)
+            if self.episodic_memories:
+                for mem in self.episodic_memories:
+                    mem.reset()
+            all_metrics['ext_reward_mean'] = 0.0
+            all_metrics['int_reward_mean'] = 0.0
+            return all_metrics
 
         # VRAM 监控
         allocated, peak = get_vram_usage()
@@ -525,8 +647,14 @@ class CuriosityPPOAgent:
                 }
                 if self.icm_net:
                     state['icm_net'] = self.icm_net.state_dict()
+                    if self.icm_optimizer is not None:
+                        state['icm_optimizer'] = self.icm_optimizer.state_dict()
+                    if self.icm_forward_optimizer is not None:
+                        state['icm_forward_optimizer'] = self.icm_forward_optimizer.state_dict()
                 if self.rnd_net:
                     state['rnd_net'] = self.rnd_net.state_dict()
+                    if self.rnd_optimizer is not None:
+                        state['rnd_optimizer'] = self.rnd_optimizer.state_dict()
                 save_checkpoint(path, state, extra={'step': self.global_step, 'metrics': metrics})
 
         self.logger.finish()
@@ -545,24 +673,41 @@ class CuriosityPPOAgent:
         return action.cpu().numpy()
 
     def save(self, path):
-        """保存模型"""
+        """保存模型 (含优化器状态, 便于续训)"""
         state = {
             'actor_critic': self.actor_critic.state_dict(),
             'config': self.config,
+            'ppo_optimizer': self.ppo_trainer.optimizer.state_dict(),
         }
         if self.icm_net:
             state['icm_net'] = self.icm_net.state_dict()
+            if self.icm_optimizer is not None:
+                state['icm_optimizer'] = self.icm_optimizer.state_dict()
+            if self.icm_forward_optimizer is not None:
+                state['icm_forward_optimizer'] = self.icm_forward_optimizer.state_dict()
         if self.rnd_net:
             state['rnd_net'] = self.rnd_net.state_dict()
+            if self.rnd_optimizer is not None:
+                state['rnd_optimizer'] = self.rnd_optimizer.state_dict()
         save_checkpoint(path, state, extra={'step': self.global_step})
 
     def load(self, path):
-        """加载模型"""
+        """加载模型 (含优化器状态, 支持断点续训)"""
         from curiosity_ppo.utils.checkpoint import load_checkpoint
         ckpt = load_checkpoint(path, self.device)
-        self.actor_critic.load_state_dict(ckpt['agent_state']['actor_critic'])
-        if self.icm_net and 'icm_net' in ckpt['agent_state']:
-            self.icm_net.load_state_dict(ckpt['agent_state']['icm_net'])
-        if self.rnd_net and 'rnd_net' in ckpt['agent_state']:
-            self.rnd_net.load_state_dict(ckpt['agent_state']['rnd_net'])
+        st = ckpt.get('agent_state', {})
+        self.actor_critic.load_state_dict(st['actor_critic'])
+        if self.icm_net and 'icm_net' in st:
+            self.icm_net.load_state_dict(st['icm_net'])
+        if self.rnd_net and 'rnd_net' in st:
+            self.rnd_net.load_state_dict(st['rnd_net'])
+        # 恢复优化器状态 (缺失时静默跳过, 兼容旧检查点)
+        if 'ppo_optimizer' in st and hasattr(self.ppo_trainer, 'optimizer'):
+            self.ppo_trainer.optimizer.load_state_dict(st['ppo_optimizer'])
+        if self.icm_optimizer is not None and 'icm_optimizer' in st:
+            self.icm_optimizer.load_state_dict(st['icm_optimizer'])
+        if self.icm_forward_optimizer is not None and 'icm_forward_optimizer' in st:
+            self.icm_forward_optimizer.load_state_dict(st['icm_forward_optimizer'])
+        if self.rnd_optimizer is not None and 'rnd_optimizer' in st:
+            self.rnd_optimizer.load_state_dict(st['rnd_optimizer'])
         self.global_step = ckpt.get('step', 0)

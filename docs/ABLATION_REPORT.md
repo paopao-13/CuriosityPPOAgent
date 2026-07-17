@@ -29,7 +29,10 @@
 ### 2.2 控制变量
 
 - **环境**: Crafter (64x64x3, Discrete(17)), 固定单一环境以隔离好奇心组件的影响。
-- **训练步数**: 1,000,000 步 (所有配置相同)。
+- **训练步数**: 配置中 `env.total_steps = 1,000,000` (Crafter) / 10,000,000 (Atari) / 1,500,000 (MiniGrid), **即为环境步数**。
+  > `agent.py` 的 `global_step += n_envs` 位于 rollout 的 `for step in range(n_steps)` 循环**内部**, 每轮 rollout 累加 `n_steps × n_envs` 个环境步, 恰好等于该 rollout 实际处理的环境步数。因此 `step_{global_step}.pt` 中的数字即真实环境步数, `total_steps` 无需额外换算。
+  > ⚠️ **Atari 指标口径 (已定方案 a)**: 严格 10M 环境步 (≈40M 帧) 下, Montezuma 3500+ 按已知方法在单卡不可达 (RND 原论文达 3500+ 用 ~10 亿帧)。
+  > 因此 Atari 交付**报 10M 环境步下的实测分数**, 并对比 PPO 基线 120 分的相对提升 (如稳定通关首房 / 平均分 ≥ 250–800); **不再写 3500+**。若未来有更大算力, 可另跑 ~1e8 步作为补充展示 (须如实标注规模)。
 - **随机种子**: seed=42 (主实验), 建议补充 seed=43, 44 做多种子统计。
 - **网络结构**: 编码器、策略网络结构完全一致, 仅好奇心模块开关不同。
 - **PPO 超参数**: lr, clip_range, batch_size, gamma 等完全一致。
@@ -61,34 +64,60 @@ python scripts/train.py --config experiments/crafter_no_icm.yaml --total-steps 1
 
 ### 2.5 评测命令
 
-每组训练完成后, 加载检查点评测:
+每组训练产物写入**独立的种子目录** `results/ablation/<prefix>_<ablation>/seed_<seed>/`,
+其中 `<prefix>` = `crafter` / `atari_montezuma` / `minigrid_doorkey`, 默认 `seed_42`。
+检查点文件名形如 `step_{global_step}.pt` (由 `agent.train()` 产出, 与 `scripts/train.py` 一致)。
+加 `--seeds 42,43,44` 可跑多种子, 各组自动聚合为 `.../aggregate/aggregate_report.*` (mean ± std)。
+
+**推荐: 用 `scripts/run_ablation.py` 一键跑完四组并自动评测** (已内置取最新检查点评测):
 
 ```bash
-# full
-python scripts/evaluate.py --checkpoint results/checkpoints/crafter_full.pt --env crafter
+# Crafter 四组消融 + 自动评测 (单种子)
+python scripts/run_ablation.py --env crafter --steps 1000000
+
+# Crafter full 多种子 (headline 指标统计)
+python scripts/run_ablation.py --env crafter --steps 1000000 --ablations full --seeds 42,43,44
+
+# Atari / MiniGrid (配置已补齐 atari_montezuma_* / minigrid_doorkey_*)
+python scripts/run_ablation.py --env atari --steps 10000000
+python scripts/run_ablation.py --env minigrid --steps 1500000
+```
+
+**手动评测** (需指向该组某 seed 实际产出的 `step_*.pt`, 可用 `get_latest_checkpoint` 取最新):
+
+```bash
+# full (seed_42)
+python scripts/evaluate.py --checkpoint results/ablation/crafter_full/seed_42/step_1000000.pt --env crafter
 
 # no_icm
-python scripts/evaluate.py --checkpoint results/checkpoints/crafter_no_icm.pt --env crafter
+python scripts/evaluate.py --checkpoint results/ablation/crafter_no_icm/seed_42/step_1000000.pt --env crafter
 
 # no_episodic
-python scripts/evaluate.py --checkpoint results/checkpoints/crafter_no_episodic.pt --env crafter
+python scripts/evaluate.py --checkpoint results/ablation/crafter_no_episodic/seed_42/step_1000000.pt --env crafter
 
 # no_rnd
-python scripts/evaluate.py --checkpoint results/checkpoints/crafter_no_rnd.pt --env crafter
+python scripts/evaluate.py --checkpoint results/ablation/crafter_no_rnd/seed_42/step_1000000.pt --env crafter
 ```
+
+> 注: 实际 `step_*.pt` 的文件名取决于训练时的 `global_step` 终值 (见 §2.2 注);
+> 若不确定具体步数, 直接取该目录下 mtime 最新的 `.pt` 即可, 或改用一键脚本自动评测。
 
 ---
 
 ## 3. 结果表格模板
 
+> **填表状态 (2026-07-16)**: 仅各环境 `full` 配置已出数据 (seed=42)；9 个变体由后台队列 `scripts/_queue_full_ablation.sh` (task Cwlsc7) 串行训练中，预计 ~4 天跑完。
+> `full` 的 Score 暂用训练末尾 `eval_score` 占位 (Crafter=0.20 / MiniGrid=0.0)，待队列自动 evaluate.py 产出正式 100-episode 报告后替换。`vs full / vs baseline / 增益分解` 需等 4 组齐了再算。
+> **Atari 口径偏差**: Atari 全家 `ent_coef=0.02` (非原 0.01 基线)，因 0.01 下探索熵会坍缩至 ~0（已实证）；Crafter/MiniGrid 全家 `ent_coef=0.01`。
+
 ### 3.1 主结果: Crafter 22 成就几何均值
 
 | 配置 | ICM | RND | Epi | Score (%) | vs full | vs baseline (15.6%) |
 |------|-----|-----|-----|-----------|---------|---------------------|
-| `full` | ON | ON | ON | _____ | -- | _____ |
-| `no_icm` | OFF | ON | ON | _____ | _____ | _____ |
-| `no_episodic` | ON | ON | OFF | _____ | _____ | _____ |
-| `no_rnd` | ON | OFF | ON | _____ | _____ | _____ |
+| `full` | ON | ON | ON | **20.0** (eval_score, 待正式评测) | -- | **+4.4** |
+| `no_icm` | OFF | ON | ON | _____（队列训练中） | _____ | _____ |
+| `no_episodic` | ON | ON | OFF | _____（队列训练中） | _____ | _____ |
+| `no_rnd` | ON | OFF | ON | _____（队列训练中） | _____ | _____ |
 
 > 填写说明: Score 为 100 episode 评测的 22 成就几何均值; "vs full" 为该配置相对 full 的差值 (百分点); "vs baseline" 为相对 PPO baseline 15.6% 的提升百分比。
 
@@ -96,9 +125,9 @@ python scripts/evaluate.py --checkpoint results/checkpoints/crafter_no_rnd.pt --
 
 | 移除组件 | Score 下降 (百分点) | 相对降幅 (%) | 增益排序 |
 |----------|--------------------|--------------|---------|
-| 移除 RND (`no_rnd`) | _____ | _____ | _____ |
-| 移除 ICM (`no_icm`) | _____ | _____ | _____ |
-| 移除 Episodic (`no_episodic`) | _____ | _____ | _____ |
+| 移除 RND (`no_rnd`) | _____（待变体数据） | _____ | _____ |
+| 移除 ICM (`no_icm`) | _____（待变体数据） | _____ | _____ |
+| 移除 Episodic (`no_episodic`) | _____（待变体数据） | _____ | _____ |
 
 > 增益排序: 下降越多 = 该组件越重要。
 
@@ -106,19 +135,23 @@ python scripts/evaluate.py --checkpoint results/checkpoints/crafter_no_rnd.pt --
 
 | 配置 | 收敛步数 (Score 首次 > 15.6%) | 峰值 Score (%) | 末段 int_reward | 末段 ext_reward |
 |------|----------------------------|---------------|----------------|----------------|
-| `full` | _____ | _____ | _____ | _____ |
-| `no_icm` | _____ | _____ | _____ | _____ |
-| `no_episodic` | _____ | _____ | _____ | _____ |
-| `no_rnd` | _____ | _____ | _____ | _____ |
+| `full` (Crafter) | ≈1000K (末段即 >15.6%) | **20.0** | 0.17 | 0.024 |
+| `no_icm` | _____（队列训练中） | _____ | _____ | _____ |
+| `no_episodic` | _____（队列训练中） | _____ | _____ | _____ |
+| `no_rnd` | _____（队列训练中） | _____ | _____ | _____ |
+
+> MiniGrid `full` (DoorKey): 末段 eval_score=**0.0**（未解出 DoorKey），ext_reward=0.0，int_reward=0.27，entropy=0.72；属探索未通关，非训练故障。
+> Atari `full`: 重启抢救中 (ent_coef=0.02, 从 2.51M 续跑至 10M)，待跑完填此表。
 
 ### 3.4 VRAM 与训练速度
 
 | 配置 | 峰值 VRAM (MB) | 训练速度 (FPS) | 备注 |
 |------|---------------|---------------|------|
-| `full` | _____ | _____ | 三模块全开 |
-| `no_icm` | _____ | _____ | 无 ICM 网络 |
-| `no_episodic` | _____ | _____ | 无 kNN 搜索 |
-| `no_rnd` | _____ | _____ | 无 RND 网络 |
+| `full` (Crafter) | **386.9** | ~62 (env-step/s) | 三模块全开；1M 步 / 16259s |
+| `full` (MiniGrid) | **386.7** | ~119 (env-step/s) | 三模块全开；1.5M 步 / 12637s |
+| `no_icm` | _____（队列训练中） | _____ | 无 ICM 网络 |
+| `no_episodic` | _____（队列训练中） | _____ | 无 kNN 搜索 |
+| `no_rnd` | _____（队列训练中） | _____ | 无 RND 网络 |
 
 ---
 

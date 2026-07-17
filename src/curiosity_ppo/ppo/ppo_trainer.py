@@ -88,6 +88,7 @@ class PPOTrainer:
                         self.amp.unscale_(self.optimizer)
                         torch.nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
                     self.amp.step(self.optimizer)
+                    self.amp.update()  # 必须: 重置 GradScaler 内部状态, 否则下一迭代 unscale_ 报错
                     self.optimizer.zero_grad()
 
                 metrics['policy_loss'] += policy_loss.item()
@@ -103,6 +104,7 @@ class PPOTrainer:
                     self.amp.unscale_(self.optimizer)
                     torch.nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
                 self.amp.step(self.optimizer)
+                self.amp.update()  # 同上, 重置 GradScaler 状态
                 self.optimizer.zero_grad()
 
         for k in ['policy_loss', 'value_ext_loss', 'value_int_loss', 'entropy', 'clip_fraction']:

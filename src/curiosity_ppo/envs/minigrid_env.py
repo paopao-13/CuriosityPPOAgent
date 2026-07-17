@@ -5,7 +5,7 @@
 import numpy as np
 import gymnasium
 from curiosity_ppo.envs.wrappers import ObsToFloat32
-from curiosity_ppo.envs.vec_env import DummyVecEnv
+from curiosity_ppo.envs.vec_env import DummyVecEnv, SubprocVecEnv
 
 __all__ = ["make_minigrid_env"]
 
@@ -46,28 +46,31 @@ class ResizeObs(gymnasium.ObservationWrapper):
         return resized.astype(np.uint8)
 
 
-def make_minigrid_env(env_id="MiniGrid-DoorKey-16x16-v0", n_envs=8, seed=42):
+def _build_single_minigrid(env_id, seed, rank):
+    """构建单个 MiniGrid 子环境 (spawn-safe: 顶层函数 + 显式参数)。"""
+    from minigrid.wrappers import ImgObsWrapper
+
+    env = gymnasium.make(env_id)
+    env = ImgObsWrapper(env)
+    env = ResizeObs(env, target_size=(64, 64))
+    env = ObsToFloat32(env)
+    env.reset(seed=seed + rank)
+    return env
+
+
+def make_minigrid_env(env_id="MiniGrid-DoorKey-16x16-v0", n_envs=8, seed=42, vec_env_type="dummy"):
     """创建 MiniGrid 向量化环境。
 
     Args:
         env_id: MiniGrid 环境 ID。
         n_envs: 并行环境数量。
         seed: 基础随机种子，各子环境使用 seed + rank。
+        vec_env_type: "dummy"(串行) 或 "subproc"(多进程并行, 单卡提速)。
 
     Returns:
-        DummyVecEnv: 观测为 float32 (已归一化到 [0, 1]) 的向量化环境。
+        VecEnv: 观测为 float32 (已归一化到 [0, 1]) 的向量化环境。
     """
-    def make_env(rank):
-        def _thunk():
-            from minigrid.wrappers import ImgObsWrapper
-
-            env = gymnasium.make(env_id)
-            env = ImgObsWrapper(env)
-            env = ResizeObs(env, target_size=(64, 64))
-            env = ObsToFloat32(env)
-            env.reset(seed=seed + rank)
-            return env
-
-        return _thunk
-
-    return DummyVecEnv([make_env(i) for i in range(n_envs)])
+    fns = [(_build_single_minigrid, (env_id, seed, i), {}) for i in range(n_envs)]
+    if vec_env_type == "subproc":
+        return SubprocVecEnv(fns)
+    return DummyVecEnv([(lambda i=i: _build_single_minigrid(env_id, seed, i)) for i in range(n_envs)])

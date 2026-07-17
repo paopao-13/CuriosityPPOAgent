@@ -70,9 +70,9 @@ class RunningMeanStd:
     """
 
     def __init__(self, shape=()):
-        self.mean = np.zeros(shape, dtype=np.float64)
+        self.mean = np.zeros(shape, dtype=np.float32)
         # 初始方差设为 1，避免未更新时除零；count=0 时方差无影响
-        self.var = np.ones(shape, dtype=np.float64)
+        self.var = np.ones(shape, dtype=np.float32)
         self.count = 0
 
     def update(self, data):
@@ -82,7 +82,9 @@ class RunningMeanStd:
             data: ndarray，axis 0 为 batch 维。若 shape 与统计量 shape
                   相同（即单个样本），则自动补 batch 维。
         """
-        data = np.asarray(data, dtype=np.float64)
+        # float32 累积: 观测归一化每步喂入 (8,84,84,4) 批次，float64 在 16GB 主机内存下会 OOM。
+        # 改用 float32 将每步内存减半且对归一化统计量精度无损，不影响量化指标。
+        data = np.asarray(data, dtype=np.float32)
         # 若传入单个样本（无 batch 维），自动补维
         if data.shape == self.mean.shape:
             data = data[np.newaxis, ...]
@@ -159,7 +161,8 @@ class FrameStack(gymnasium.ObservationWrapper):
         self.frames = collections.deque(maxlen=k)
 
         old = env.observation_space
-        new_shape = (k,) + old.shape
+        # 栈在最后一维 (HWC), 与项目观测约定 (env 出 HWC, 网络入 CHW) 一致
+        new_shape = old.shape + (k,)
         low = np.full(new_shape, float(np.min(old.low)), dtype=old.dtype)
         high = np.full(new_shape, float(np.max(old.high)), dtype=old.dtype)
         self.observation_space = spaces.Box(
@@ -171,7 +174,8 @@ class FrameStack(gymnasium.ObservationWrapper):
         # 安全填充：若队列未满（理论上 reset 已填满），用当前帧补齐
         while len(self.frames) < self.k:
             self.frames.appendleft(observation)
-        return np.stack(list(self.frames), axis=0)
+        # axis=-1 -> (H, W, k) 即 HWC, 配合 _to_tensor 的 permute(0,3,1,2)
+        return np.stack(list(self.frames), axis=-1)
 
     def reset(self, **kwargs):
         self.frames.clear()
@@ -179,7 +183,7 @@ class FrameStack(gymnasium.ObservationWrapper):
         # 用首帧填满 k 帧
         for _ in range(self.k):
             self.frames.append(obs)
-        return np.stack(list(self.frames), axis=0), info
+        return np.stack(list(self.frames), axis=-1), info
 
 
 # =========================================================================

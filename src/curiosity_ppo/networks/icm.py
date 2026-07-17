@@ -53,17 +53,20 @@ class ICMNet(nn.Module):
             nn.Linear(hidden_dim, feature_dim),
         )
 
-    def forward(self, s_t: torch.Tensor, a: torch.Tensor, s_next: torch.Tensor):
+    def forward(self, s_t: torch.Tensor, a: torch.Tensor, s_next: torch.Tensor,
+                detach_phi_t_for_forward: bool = False):
         """前向计算.
 
         Args:
             s_t:     (N, C, H, W) 当前观测.
             a:       (N,) long, 动作索引.
             s_next:  (N, C, H, W) 下一观测.
+            detach_phi_t_for_forward: 若 True, 前向模型用 phi_t.detach(),
+                阻止 forward_loss 梯度回传到共享编码器 (防编码器发散).
 
         Returns:
             inverse_loss: 标量, 逆模型交叉熵损失 (可反传到 encoder).
-            forward_loss: 标量, 前向模型 MSE 损失 (乘以 feature_dim), 仅通过 phi_t 反传.
+            forward_loss: 标量, 前向模型 MSE 损失 (按 detach 策略反传).
             phi_t:        (N, feature_dim), 当前观测特征, 用于情景记忆嵌入.
         """
         phi_t = self.encoder(s_t)
@@ -75,10 +78,13 @@ class ICMNet(nn.Module):
 
         # 前向模型: 由当前特征 + 动作预测下一特征
         a_onehot = F.one_hot(a, num_classes=self.action_dim).to(phi_t.dtype)
-        phi_next_pred = self.forward_model(torch.cat([phi_t, a_onehot], dim=-1))
-        # detach phi_next: 前向损失只通过 phi_t 反传, 不更新 encoder 去拟合 phi_next
-        # 不再乘 feature_dim: mse_loss 已对特征维度取均值, 乘 feature_dim 会导致
-        # forward_loss >> inverse_loss, 编码器过度偏向前向预测而弱化可控性过滤
+        # 关键修复: detach phi_t 阻止 forward_loss → encoder 反传
+        # NGU 论文中 forward_loss 仅用于计算内在奖励信号,
+        # 不应驱动编码器学习; 编码器只由 inverse_loss 驱动 (可控性过滤)
+        phi_t_input = phi_t.detach() if detach_phi_t_for_forward else phi_t
+        phi_next_pred = self.forward_model(torch.cat([phi_t_input, a_onehot], dim=-1))
+        # detach phi_next: 前向损失不更新 encoder 去拟合 phi_next
+        # 不再乘 feature_dim: mse_loss 已对特征维度取均值
         forward_loss = F.mse_loss(phi_next_pred, phi_next.detach())
 
         return inverse_loss, forward_loss, phi_t

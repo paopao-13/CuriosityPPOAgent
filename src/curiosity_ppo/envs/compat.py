@@ -45,6 +45,13 @@ class GymCompatWrapper(gymnasium.Wrapper):
         # 旧 gym 风格：只返回 obs
         return result, {}
 
+    def close(self):
+        """安全关闭被包装的旧版环境 (crafter.Env 无 close 属性)。"""
+        try:
+            self.env.close()
+        except (AttributeError, TypeError):
+            pass
+
     def step(self, action):
         result = self.env.step(action)
         if len(result) == 4:

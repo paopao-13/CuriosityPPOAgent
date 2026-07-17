@@ -19,9 +19,11 @@ class RNDNet(nn.Module):
         encoder_cls: 编码器类 (NatureDQNEncoder 用于 84×84, CrafterEncoder 用于 64×64).
     """
 
-    def __init__(self, in_channels: int = 4, output_dim: int = 512, encoder_cls=None):
+    def __init__(self, in_channels: int = 4, output_dim: int = 512,
+                 predictor_hidden: int = 512, encoder_cls=None):
         super().__init__()
         self.output_dim = output_dim
+        self.predictor_hidden = predictor_hidden
 
         if encoder_cls is None:
             encoder_cls = NatureDQNEncoder
@@ -32,14 +34,16 @@ class RNDNet(nn.Module):
             p.requires_grad = False
         self.target.eval()
 
-        # predictor 网络: encoder + FC(512) -> ReLU -> FC(512) -> ReLU -> FC(512)
+        # predictor 网络: encoder -> FC(predictor_hidden) -> ReLU
+        #                          -> FC(predictor_hidden) -> ReLU -> FC(output_dim)
+        # 末层输出必须与 target 的 output_dim 对齐, 否则 intrinsic_reward 形状不匹配。
         self.predictor = nn.Sequential(
             encoder_cls(in_channels=in_channels, out_dim=output_dim),
-            nn.Linear(output_dim, 512),
+            nn.Linear(output_dim, predictor_hidden),
             nn.ReLU(),
-            nn.Linear(512, 512),
+            nn.Linear(predictor_hidden, predictor_hidden),
             nn.ReLU(),
-            nn.Linear(512, 512),
+            nn.Linear(predictor_hidden, output_dim),
         )
 
     def forward(self, obs: torch.Tensor):
