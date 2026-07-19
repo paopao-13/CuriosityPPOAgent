@@ -1,0 +1,14 @@
+# 云端 Atari 训练最小依赖（仅保留 Atari/Curiosity-PPO 必需项）
+# 相比 requirements.txt 移除了 crafter / minigrid / gym==0.26.2 / pytest，
+# 显著加快云端 pip 安装、降低失败面。
+torch>=2.1
+torchvision
+numpy
+opencv-python-headless
+pyyaml
+scipy
+imageio
+imageio-ffmpeg
+wandb
+gymnasium[atari,accept-rom-license]
+ale-py
