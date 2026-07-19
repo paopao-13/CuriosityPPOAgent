@@ -194,9 +194,9 @@ python scripts/evaluate.py --checkpoint results/checkpoints/last.pt --env atari
 
 - `mean_score`: 平均游戏分数
 - `max_score`: 最高分数
-- `baseline`: 120 pts
-- `target`: 3500 pts
-- `target_met`: 是否达标
+- `baseline`: 120 pts (PPO 基线)
+- `score_10m`: 严格 10M 环境步下的实测平均分数
+- `target`: 相对 PPO 基线 120 分的显著提升 (不再以 3500 为硬指标)
 
 ### 3.3 MiniGrid 评测
 

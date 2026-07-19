@@ -16,7 +16,7 @@
 本地 `agent.py` / `amp.py` / `train.py` 等都比 GitHub 新, 必须推送, 否则 Kaggle clone 会重蹈云端覆辙.
 
 ```bash
-cd D:/简历/curiosity-ppo
+cd <repo-root>
 git add -A
 git commit -m "fix(atari): is_image CHW 判定 + amp 安全版 + Pong 轻量配置"
 git push origin main
@@ -74,7 +74,7 @@ git push origin main
 ## 如果只想在本地免费跑
 
 ```bash
-cd D:/简历/curiosity-ppo
+cd <repo-root>
 python scripts/train.py --config experiments/atari_pong_quick.yaml --total-steps 1000000 --checkpoint-dir results/pong_local
 ```
 

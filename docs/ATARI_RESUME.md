@@ -10,15 +10,18 @@
 ### 1.1 本机（Windows）推送修正代码【一次性，关键】
 > DSW 实例 clone 的是 GitHub 旧版 `train.py`，可能不支持 `--resume`。先推送修正版。
 ```bash
-cd D:/简历/curiosity-ppo
+cd <repo-root>
 git add src scripts experiments docs
 git commit -m "fix(atari): is_image CHW 判定 + amp 安全版 + resume 支持"
 git push origin main
 ```
 
-### 1.2 启动 DSW 实例
-- 阿里云 PAI-DSW 控制台 → 找到 `hi-atari-test-noss`（A10）→ 点「启动」
-- 确认控制台显示「资源包余额：100 计算时」
+### 1.2 启动 DSW 实例（先核实资源包，再新建）
+> ⚠️ 修正：PAI-DSW 无"资源包配"模式。正确做法：资源类型选「公共资源」（按量付费），DSW 资源包(100 CU·H)后台自动抵扣。
+> 创建前先去 **费用中心 → 我的资源包** 确认那张 100 CU·H 包：① 适用产品=交互式建模(DSW) ② 地域与实例一致 ③ 状态可用 ④ 支持规格含 `ecs.gn7i-c8g1.2xlarge`（注意是 gn7i，不是旧实例用的 gn7r）。
+- 阿里云 PAI-DSW 控制台 → **新建实例**（旧实例 `hi-atari-test-noss` 是 gn7r 规格、且按量未抵扣，直接弃用新建）
+- 资源类型=**公共资源**，资源规格=**`ecs.gn7i-c8g1.2xlarge`（A10, 30GB）**，地域与资源包一致
+- 实例变「运行中」后，费用自动从 100 CU·H 抵扣，不再扣现金余额
 
 ### 1.3 DSW 终端：拉取修正代码
 ```bash

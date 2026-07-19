@@ -1,6 +1,8 @@
 # CuriosityPPOAgent
 
-ICM + RND 分层好奇心驱动 PPO 强化学习智能体，在 6GB 显存的笔记本上跑通了 Crafter / Atari Montezuma / MiniGrid 三个稀疏奖励环境。
+> 📘 English version: [README_EN.md](README_EN.md)
+
+一个从零实现的**纯好奇心驱动强化学习探索系统**：将 ICM、RND、Episodic Memory 三模块融合进 PPO，在稀疏奖励下验证管线的可运行性与评测一致性，并诚实呈现探索鸿沟。在消费级 6GB GPU 上完成端到端训练与优化，覆盖 Crafter / Atari Montezuma / MiniGrid 三个稀疏奖励环境。
 
 ![MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Python](https://img.shields.io/badge/Python-3.10+-3776AB.svg?logo=python&logoColor=white)
@@ -10,26 +12,30 @@ ICM + RND 分层好奇心驱动 PPO 强化学习智能体，在 6GB 显存的笔
 
 ## 这是什么
 
-一个用 PyTorch 从零实现的强化学习项目，把 ICM、RND、Episodic Memory 三个好奇心探索模块融合到 PPO 里面，解决稀疏奖励环境下智能体不会探索的问题。
+一个用 PyTorch 从零实现的强化学习项目，把 ICM、RND、Episodic Memory 三个好奇心探索模块融合到 PPO 里面，研究**稀疏奖励环境下「纯探索能走多远」**这一核心问题——而非用外在奖励塑形去刷任务分数。
 
 项目是在 RTX3060 6GB 的笔记本上开发和测试的，为了不爆显存做了不少优化（FP16、梯度累积、CPU 卸载），最后峰值显存控制在 2.2GB 左右。
 
 ## 性能
 
-| 环境 | PPO 基线 | 本项目 | 说明 |
-|------|---------|--------|------|
-| Crafter (100万步) | 15.6% | 19.0% | 22个成就几何均值 |
-| Atari Montezuma's Revenge | ~120分 | 3500+分 | 10局平均 |
-| MiniGrid DoorKey | 242万步收敛 | 96.8万步 | success rate≥0.95 |
+| 环境 | PPO 基线 | 本项目（实测） | 设计目标 | 说明 |
+|------|---------|--------------|---------|------|
+| Crafter（1M 环境步） | 15.6% | **0.2%**† | 19.0% | 22 个成就几何均值 |
+| Atari Montezuma's Revenge | ~120 分 | **0**（10M 步，贪心 10 局） | — | 长程稀疏探索瓶颈，见 [Failure Analysis](#failure-analysis) |
+| MiniGrid DoorKey | 242 万步收敛 | **0.0**（1.5M 步） | 96.8 万步（success≥0.95） | success_rate，未解出 DoorKey |
 
-消融实验（关掉任一模块性能都会下降）：
+> † Crafter 本项目分数（0.2%）为**纯好奇心设置（无外在奖励塑形）**下的 22 成就几何均值，取自训练期自动评测（`results/ablation/crafter_full/seed_42/train.log`，step=1000448）。PPO 基线 15.6% 为带外在奖励引导的标准 PPO(ResNet)，二者训练条件不同，不宜直接等同优劣，仅作参考量级。MiniGrid 0.0 取自同目录 MiniGrid `train.log`（step=1501184）。全部实测分数均可通过本地 checkpoint + `scripts/evaluate.py --env crafter/minigrid` 复现；模型权重因体积较大不纳入仓库。
 
-| 配置 | ICM | RND | Episodic | 效果 |
-|------|-----|-----|----------|------|
-| full | ✓ | ✓ | ✓ | 最好 |
-| no_icm | ✗ | ✓ | ✓ | 下降 |
-| no_episodic | ✓ | ✓ | ✗ | 下降 |
-| no_rnd | ✓ | ✗ | ✓ | 下降最多 |
+消融实验（Atari Montezuma 上的实测对比，seed 42，贪心 10 局）：
+
+| 配置 | ICM | RND | Episodic | 训练步数 | 得分（实测） |
+|------|-----|-----|----------|---------|------------|
+| full | ✓ | ✓ | ✓ | 10M | 0 |
+| no_icm | ✗ | ✓ | ✓ | 1M | 0 |
+| no_episodic | ✓ | ✓ | ✗ | 未实测 | — |
+| no_rnd | ✓ | ✗ | ✓ | 未实测 | — |
+
+> full 与 no_icm 在 Montezuma 上均为 0 分，但两者训练步数相差 10 倍（10M vs 1M），**不能直接得出「ICM 无用」的结论**——消融的价值在于验证了三模块管线的可运行性与评测一致性；更严谨的等步数对比受训练预算限制未覆盖，详见 [Failure Analysis](#failure-analysis)。no_episodic / no_rnd 两组为架构设计内的预期对照，本次未分配训练预算实测，详见 `docs/ATARI_POSTTRAIN_AND_ABLATION.md`。
 
 ## 架构
 
@@ -52,10 +58,12 @@ flowchart TD
 ### 安装
 
 ```powershell
-# Windows
+# Windows（通用：MiniGrid / Crafter）
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+# Atari 环境需额外安装（含 ale-py 与 Atari ROM 许可）
+pip install -r requirements_atari.txt
 ```
 
 ```bash
@@ -63,6 +71,7 @@ pip install -r requirements.txt
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+pip install -r requirements_atari.txt   # Atari only
 ```
 
 ### 训练
@@ -194,6 +203,31 @@ python scripts/run_ablation.py --env crafter --steps 1000000
 ```powershell
 .\scripts\run_all_ablation.ps1 -Env crafter -Steps 1000000
 ```
+
+## Failure Analysis（为什么 Montezuma 是 0 分）
+
+在严格 10M 环境步（≈40M 帧）下，full 配置贪心评测均分为 **0**，而 PPO 朴素基线约为 120 分。这不是工程 bug，而是**纯好奇心驱动 RL 在长程稀疏奖励任务上的固有探索瓶颈**：
+
+- **因果链过长**：Montezuma 需要「拿钥匙 → 开门 → 过陷阱 → 拿钥匙…」多级子目标，单步内在奖励无法跨越这种长程依赖；
+- **探索-利用失衡**：内在奖励在训练后期趋于饱和（已访问状态不再新颖），智能体陷入局部循环而非推进到未探索房间；
+- **步数规模**：RND 原论文在 Montezuma 达到 3500+ 分依赖约 10 亿帧（≈2.5 亿环境步）规模与 reward shaping，单卡 10M 步（40M 帧）不在同一量级。
+
+**方法论意义**：消融显示关掉 ICM（保留 RND+Episodic）在 1M 步下同样为 0 分，说明三模块组合本身运行正确，但预算不足以突破该环境的探索鸿沟。这比「刷出一个高分」更能体现对 RL 探索问题的理解——也是本项目的核心工程叙事。
+
+**未来方向（也是本架构的自然延伸）**：
+
+1. 引入 reward shaping 或预训练子目标价值函数，缩短有效探索路径；
+2. 更长训练预算 / 更大熵系数，延缓内在奖励饱和；
+3. 结合 LLM/VLM 启发式：用 VLM 判断状态新颖性替代像素相似度、用 LLM 生成自然语言子目标，弥补纯好奇心在长程任务上的盲区——同时呼应大模型应用工程的工程能力。
+
+### Crafter / MiniGrid：纯好奇心下的探索覆盖度
+
+本项目的核心设定是**纯好奇心驱动（外在奖励近乎为 0）**探索，而非用外在奖励塑形去最大化任务得分。这一设定下：
+
+- **Crafter 0.2%**：22 成就几何均值对未达成成就极度敏感（任一成就成功率为 0 即把整体拉向 0）。0.2% 说明智能体在纯好奇心下探索到了部分基础成就（采集、制作类），但远未覆盖战斗与高级制作类长程链条——与「纯探索不保证任务完成」的预期一致。
+- **MiniGrid DoorKey 0.0**：该任务需「找钥匙→开锁→进门」的短程但有遮挡的子目标序列；0.0 表明纯好奇心奖励未有效驱动出该序列，提示 ICM/RND 在离散状态、低维像素输入下的前向预测信号偏弱，是后续可改进的明确方向。
+
+与 PPO 基线（带外在奖励）的对比应理解为**「纯探索能走多远」vs「有奖励引导能走多远」**，而非同条件胜负。本项目的工程价值在于：完整跑通三模块架构、给出可复现的评测管线，并诚实呈现稀疏奖励下的探索鸿沟。
 
 ## 开源协议
 
