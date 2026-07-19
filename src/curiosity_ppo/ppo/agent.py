@@ -586,18 +586,20 @@ class CuriosityPPOAgent:
 
         return all_metrics
 
-    def evaluate(self, n_episodes=10, max_steps=10000):
-        """训练中评测, 返回平均外在奖励
+    def evaluate(self, n_episodes=100, max_steps=10000):
+        """训练中评测, 返回 success rate (到达终点的 episode 比例)
+
+        使用确定性贪心策略 (argmax)。success 判定: 累积外在奖励(含塑形)
+        含 goal_reward(=1.0), 即 >=1.0 视为到达终点 (拿钥匙+开门=0.8 < 1.0)。
 
         Args:
             n_episodes: 评测 episode 数量.
             max_steps: 最大评测步数上限, 防止无限循环.
         """
-        # 用向量化环境跑评测, 确定性策略
         eval_obs = self.vec_env.reset()
         eval_rewards = np.zeros(self.n_envs, dtype=np.float32)
         completed = 0
-        episode_rewards = []
+        successes = 0
         step_count = 0
 
         while completed < n_episodes and step_count < max_steps:
@@ -611,16 +613,17 @@ class CuriosityPPOAgent:
             step_count += 1
             for i in range(self.n_envs):
                 if done[i]:
-                    episode_rewards.append(eval_rewards[i])
-                    eval_rewards[i] = 0.0
+                    if eval_rewards[i] >= 1.0:  # 到达终点 (goal_reward=1.0)
+                        successes += 1
                     completed += 1
+                    eval_rewards[i] = 0.0
                     if completed >= n_episodes:
                         break
 
-        return float(np.mean(episode_rewards)) if episode_rewards else 0.0
+        return successes / completed if completed > 0 else 0.0
 
     def train(self, total_steps=None, checkpoint_interval=10000, checkpoint_dir='results/checkpoints',
-              eval_interval=50000, n_eval_episodes=10):
+              eval_interval=50000, n_eval_episodes=100):
         """完整训练循环
 
         定期评测, 记录 eval_score

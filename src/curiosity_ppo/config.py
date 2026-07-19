@@ -18,6 +18,8 @@ class PPOConfig:
     accumulation_steps: int = 4
     n_steps: int = 128
     n_envs: int = 8
+    ext_adv_coef: float = 1.0   # 外部优势在策略梯度中的权重
+    int_adv_coef: float = 1.0   # 内部(好奇心)优势权重
 
 
 @dataclass
@@ -52,6 +54,9 @@ class EnvConfig:
     n_envs: int = 8
     total_steps: int = 1000000
     vec_env_type: str = "dummy"  # "dummy" | "subproc"
+    reward_shaping: bool = False  # MiniGrid: 拿钥匙/开门给轻量外部奖励，使外部信号可学习
+    env_id: str = "MiniGrid-DoorKey-16x16-v0"  # 实际 gym id（MiniGrid 标准 DoorKey 为 8x8）
+    fixed_layout_seed: Optional[int] = None  # 非 None=课程 phase1 固定布局(每 rank 固定)
 
 
 @dataclass
@@ -69,7 +74,7 @@ class Config:
 
 
 def load_config(yaml_path: str) -> Config:
-    with open(yaml_path, 'r') as f:
+    with open(yaml_path, 'r', encoding='utf-8') as f:
         data = yaml.safe_load(f)
     config = Config()
     if data is None:

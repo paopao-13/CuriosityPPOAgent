@@ -33,7 +33,12 @@ def make_env(config):
     elif "minigrid" in name or "doorkey" in name:
         from curiosity_ppo.envs.minigrid_env import make_minigrid_env
 
-        return make_minigrid_env(n_envs=config.env.n_envs, seed=config.seed, vec_env_type=vec_type)
+        return make_minigrid_env(
+            n_envs=config.env.n_envs, seed=config.seed, vec_env_type=vec_type,
+            reward_shaping=getattr(config.env, "reward_shaping", False),
+            env_id=getattr(config.env, "env_id", None),
+            fixed_layout_seed=getattr(config.env, "fixed_layout_seed", None),
+        )
     else:
         raise ValueError(f"Unknown env: {name}")
 

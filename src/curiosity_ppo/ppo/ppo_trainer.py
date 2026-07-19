@@ -58,14 +58,18 @@ class PPOTrainer:
                     # PPO ratio
                     ratio = torch.exp(logprobs - batch['logprobs'])
 
-                    # 双轨优势分别归一化后合并
+                    # 双轨优势分别归一化后按系数合并
                     # ext 用 gamma=0.999, int 用 gamma=0.99, 尺度差异大
-                    # 分别归一化确保两路信号都不被对方淹没
+                    # 分别归一化确保两路信号都不被对方淹没;
+                    # ext_adv_coef / int_adv_coef 控制两路在策略梯度中的相对权重
+                    # (稀疏外部奖励任务需提高 ext_adv_coef, 否则 adv_ext 全 0 时外部信号完全消失)
                     adv_ext = batch['advantages_ext']
                     adv_int = batch['advantages_int']
                     adv_ext = (adv_ext - adv_ext.mean()) / (adv_ext.std() + 1e-8)
                     adv_int = (adv_int - adv_int.mean()) / (adv_int.std() + 1e-8)
-                    advantages = adv_ext + adv_int
+                    ext_coef = float(getattr(self.config.ppo, 'ext_adv_coef', 1.0))
+                    int_coef = float(getattr(self.config.ppo, 'int_adv_coef', 1.0))
+                    advantages = ext_coef * adv_ext + int_coef * adv_int
 
                     # PPO clipped objective
                     surr1 = ratio * advantages
