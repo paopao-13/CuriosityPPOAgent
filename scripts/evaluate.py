@@ -52,23 +52,25 @@ def build_eval_env(env_name, seed):
 
 
 def load_config_for_env(checkpoint_path, config_path, env_name):
-    """加载配置: 优先 --config, 其次 checkpoint 内置 config, 最后默认 Config。
+    """加载配置: 优先 checkpoint 内置 config (保证架构与训练一致), 其次 --config, 最后默认 Config。
 
     强制将 env.name 与 env.n_envs 与评测环境对齐 (env.name 影响编码器选择)。
     """
+    # 优先用 checkpoint 内置 config: 训练时 agent.save 存了完整 Config,
+    # 用它重建网络可 100% 匹配编码器/通道数/动作数, 避免选错 CrafterEncoder/NatureDQN。
+    if checkpoint_path and os.path.exists(checkpoint_path):
+        try:
+            ckpt = load_checkpoint(checkpoint_path, device="cpu")
+            saved = ckpt.get("agent_state", {}).get("config")
+            if saved is not None:
+                saved.env.n_envs = 1
+                return saved
+        except Exception:
+            pass
     if config_path and os.path.exists(config_path):
         cfg = load_config(config_path)
     else:
         cfg = Config()
-        # 尝试从 checkpoint 读取保存的 config
-        if checkpoint_path and os.path.exists(checkpoint_path):
-            try:
-                ckpt = load_checkpoint(checkpoint_path, device="cpu")
-                saved = ckpt.get("agent_state", {}).get("config")
-                if saved is not None:
-                    cfg = saved
-            except Exception:
-                pass
     # 与评测环境对齐
     cfg.env.name = env_name
     cfg.env.n_envs = 1

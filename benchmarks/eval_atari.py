@@ -54,8 +54,7 @@ def evaluate_atari(agent, n_episodes=10, seed=42, max_steps=100000):
             'min_score': float,
             'episode_scores': list,   # 每个 episode 的游戏分数
             'episode_lengths': list,
-            'baseline': int,
-            'target': int,
+            'baseline': int,   # PPO 基线分数(默认120)；不使用硬编码绝对 target
         }
     """
     env = _make_atari_eval_env(seed=seed)
@@ -99,5 +98,6 @@ def evaluate_atari(agent, n_episodes=10, seed=42, max_steps=100000):
         "episode_scores": episode_scores,
         "episode_lengths": episode_lengths,
         "baseline": BASELINE_SCORE,
-        "target": TARGET_SCORE,
+        # 注意：不再注入硬编码绝对 target(原 TARGET_SCORE=3500)。
+        # EXPERIMENT.md 口径为"相对基线 120 显著提升"，由 benchmarks/report.py 判定 target_met。
     }

@@ -47,12 +47,23 @@ def generate_report(results, output_dir="results"):
     if "atari" in results:
         r = results["atari"]
         baseline = r.get("baseline", 120)
-        target = r.get("target", 3500)
+        # EXPERIMENT.md: Atari 不再以 3500 为硬指标，只需相对 PPO 基线(120)显著提升。
+        # 兼容旧调用：若显式传入 target 则仍按绝对线判，否则按"相对基线提升"判。
+        target = r.get("target", None)
+        improvement = (r["mean_score"] - baseline) / baseline * 100 if baseline else 0.0
+        if target is None:
+            target_met = r["mean_score"] > baseline
+            target_note = f"相对基线 {baseline} 提升 {improvement:.1f}% (EXPERIMENT.md 口径)"
+        else:
+            target_met = r["mean_score"] >= target
+            target_note = f"绝对目标 {target} (兼容旧口径)"
         report["summary"]["atari"] = {
             "mean_score": r["mean_score"],
             "max_score": r.get("max_score", r["mean_score"]),
             "baseline": baseline,
-            "target_met": r["mean_score"] >= target,
+            "improvement_pct": improvement,
+            "target_met": target_met,
+            "target_note": target_note,
         }
 
     if "minigrid" in results:

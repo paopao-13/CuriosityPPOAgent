@@ -679,6 +679,9 @@ class CuriosityPPOAgent:
             'config': self.config,
             'ppo_optimizer': self.ppo_trainer.optimizer.state_dict(),
         }
+        # 观测归一化统计量: 评测/续训必须恢复, 否则输入分布漂移导致性能假阴性
+        if self.policy_obs_rms is not None:
+            state['policy_obs_rms'] = self.policy_obs_rms
         if self.icm_net:
             state['icm_net'] = self.icm_net.state_dict()
             if self.icm_optimizer is not None:
@@ -710,4 +713,7 @@ class CuriosityPPOAgent:
             self.icm_forward_optimizer.load_state_dict(st['icm_forward_optimizer'])
         if self.rnd_optimizer is not None and 'rnd_optimizer' in st:
             self.rnd_optimizer.load_state_dict(st['rnd_optimizer'])
+        # 恢复观测归一化统计量 (评测/续训关键)
+        if 'policy_obs_rms' in st and self.policy_obs_rms is not None:
+            self.policy_obs_rms = st['policy_obs_rms']
         self.global_step = ckpt.get('step', 0)
