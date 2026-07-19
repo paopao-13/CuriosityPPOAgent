@@ -15,9 +15,9 @@
 #          评测永远对最新 ckpt 执行。任务中途被杀可安全重跑。
 # ============================================================================
 set -u
-ROOT="D:/简历/curiosity-ppo"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-PY="C:/Users/jx/AppData/Local/Programs/Python/Python311/python.exe"
+PY="python"
 LOCK_WRAP="bash scripts/_gpu_lock.sh"
 QLOG="results/ablation/_queue_full_ablation.log"
 mkdir -p "$(dirname "$QLOG")"

@@ -5,9 +5,9 @@
 # 用法 (后台):
 #   bash scripts/_queue_atari.sh > results/ablation/atari_montezuma_full/seed_42/queue.log 2>&1 &
 set -e
-ROOT="D:/简历/curiosity-ppo"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-PY="C:/Users/jx/AppData/Local/Programs/Python/Python311/python.exe"
+PY="python"
 LOG="results/ablation/atari_montezuma_full/seed_42/train.log"
 mkdir -p "$(dirname "$LOG")"
 
