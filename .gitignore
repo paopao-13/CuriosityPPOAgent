@@ -87,6 +87,17 @@ logs/
 # ---- PyTorch 缓存 ----
 .torch/
 
+# ---- 本地内部工作笔记（不纳入公开仓库，仅本地保留）----
+notes/
+docs/ATARI_POSTTRAIN_AND_ABLATION.md
+docs/EXECUTION_PLAN.md
+docs/KAGGLE_FREE_GPU.md
+docs/VRAM_OPTIMIZATION.md
+docs/WANDB_DASHBOARD.md
+docs/release_note.md
+GITHUB_PUSH_PREP.md
+
+
 # ---- 压缩包 ----
 *.tar.gz
 *.tar

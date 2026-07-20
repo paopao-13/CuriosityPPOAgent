@@ -24,6 +24,7 @@
 | Atari Montezuma's Revenge | ~120 分 | **0**（10M 步，贪心 10 局） | — | 长程稀疏探索瓶颈，见 [Failure Analysis](#failure-analysis) |
 | MiniGrid DoorKey（纯好奇心，16×16） | 242 万步收敛 | **0.0**（1.5M 步） | 96.8 万步（success≥0.95） | success_rate，未解出 DoorKey；根因=等权优势合并淹没外部信号 |
 | MiniGrid DoorKey（课程学习，8×8） | — | **0.21**（约 2M 步：固定布局预热 500K + 随机泛化 1.5M） | 96.8 万步（success≥0.95） | 含奖励塑形 + 外部优势加权(ext_adv_coef=4)，非纯好奇心设置 |
+| MiniGrid DoorKey（势能塑形，8×8） | — | **1.00**（4M 步随机布局） | 96.8 万步（success≥0.95） | potential-based shaping（到子目标距离的连续稠密奖励）+ ext_adv_coef=2，非纯好奇心设置 |
 | MiniGrid DoorKey（势能塑形，8×8） | — | **1.00**（4M 步，success_rate 100 局贪心） | 96.8 万步（success≥0.95） | 势能塑形 Φ=−到子目标曼哈顿距离提供连续稠密引导；外部优势加权(ext_adv_coef=2)，非纯好奇心设置 |
 
 > † Crafter 本项目分数（0.2%）为**纯好奇心设置（无外在奖励塑形）**下的 22 成就几何均值，取自训练期自动评测（`results/ablation/crafter_full/seed_42/train.log`，step=1000448）。PPO 基线 15.6% 为带外在奖励引导的标准 PPO(ResNet)，二者训练条件不同，不宜直接等同优劣，仅作参考量级。MiniGrid 三行分数均可在本地复现：0.0 取自旧基线纯好奇心训练（`results/ablation/minigrid_doorkey_full/seed_42/train.log`，step=1501184）；0.21 取自课程学习（`results/ablation/minigrid_curriculum/phase2/seed_42/_wrapper.log`）；1.00 取自势能塑形（`results/ablation/minigrid_potential/seed_42/_wrapper.log`，评测尾段稳定于 1.00）。注意：0.21 与 1.00 均**非纯好奇心设置**（含奖励塑形 + 外部优势加权），纯好奇心基线仍为 0.0——这恰好说明本项目最具价值的发现是「等权优势合并淹没外部信号」这一根因诊断，而非好奇心模块本身。全部实测分数均可通过本地 checkpoint + `scripts/evaluate.py --env crafter/minigrid` 复现；模型权重因体积较大不纳入仓库。
@@ -38,6 +39,12 @@
 | no_rnd | ✓ | ✗ | ✓ | 未实测 | — |
 
 > full 与 no_icm 在 Montezuma 上均为 0 分，但两者训练步数相差 10 倍（10M vs 1M），**不能直接得出「ICM 无用」的结论**——消融的价值在于验证了三模块管线的可运行性与评测一致性；更严谨的等步数对比受训练预算限制未覆盖，详见 [Failure Analysis](#failure-analysis)。no_episodic / no_rnd 两组为架构设计内的预期对照，本次未分配训练预算实测，详见 `docs/ATARI_POSTTRAIN_AND_ABLATION.md`。
+
+### MiniGrid DoorKey-8×8 训练曲线
+
+> 左：两种塑形设置的 success rate 对比（虚线为 0.95 目标）；右：势能塑形设置的收敛过程（稳定饱和至 1.0）。评测为 100 局贪心策略。
+
+![MiniGrid DoorKey-8x8 success rate](docs/figures/minigrid_curves.png)
 
 ## 架构
 

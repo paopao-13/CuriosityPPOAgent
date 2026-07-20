@@ -3,8 +3,8 @@
 # 在用户离开时后台运行; 每步结果落盘到 results/ablation/AUTO_PIPELINE.log 与 AUTO_RESULT.md
 import os, re, time, subprocess, glob
 
-ROOT = r'D:\简历\curiosity-ppo'
-PY = r'C:\Users\jx\AppData\Local\Programs\Python\Python311\python.exe'
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PY = 'python'  # 使用 PATH 中的 python；本地训练已验证可用
 PHASE1_DIR = os.path.join(ROOT, 'results/ablation/minigrid_curriculum/phase1/seed_42')
 PHASE2_DIR = os.path.join(ROOT, 'results/ablation/minigrid_curriculum/phase2/seed_42')
 CONFIG_P2 = os.path.join(ROOT, 'experiments/minigrid_curriculum_p2_random.yaml')
