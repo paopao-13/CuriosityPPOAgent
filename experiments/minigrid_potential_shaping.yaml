@@ -1,0 +1,54 @@
+# MiniGrid DoorKey 8x8 — 势能塑形冲 success≈0.95
+# 用 potential-based shaping (朝当前子目标距离的连续稠密奖励) 替代稀疏子目标塑形,
+# 配合 ext_adv_coef=2 (外部梯度主导但保留部分内在探索) 在随机布局上训练。
+# 启动: python scripts/train.py --config experiments/minigrid_potential_shaping.yaml \
+#        --run-name minigrid_potential --checkpoint-dir results/ablation/minigrid_potential/seed_42
+ppo:
+  lr: 2.5e-4
+  clip_range: 0.1
+  ppo_epochs: 4
+  gamma_ext: 0.999
+  gamma_int: 0.99
+  gae_lambda: 0.95
+  ent_coef: 0.02
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  batch_size: 128
+  accumulation_steps: 4
+  n_steps: 256
+  n_envs: 8
+  ext_adv_coef: 2.0
+  int_adv_coef: 1.0
+
+rnd:
+  enabled: true
+  output_dim: 512
+  predictor_hidden: 512
+  obs_normalize: true
+  reward_normalize: true
+
+icm:
+  enabled: true
+  feature_dim: 288
+  eta: 0.2
+  hidden_dim: 256
+
+episodic:
+  enabled: true
+  k: 5
+  epsilon: 1.0e-3
+  L: 5
+  capacity: 10000
+
+env:
+  name: minigrid_doorkey
+  n_envs: 8
+  total_steps: 4000000
+  reward_shaping: true
+  env_id: MiniGrid-DoorKey-8x8-v0
+  # fixed_layout_seed 不设置 -> 随机布局(默认 None)
+
+ablation: full
+use_amp: true
+seed: 42
+wandb_project: curiosity-ppo

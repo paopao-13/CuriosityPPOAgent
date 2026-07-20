@@ -11,56 +11,65 @@ __all__ = ["make_minigrid_env"]
 
 
 class RewardShapingWrapper(gymnasium.RewardWrapper):
-    """MiniGrid 轻量奖励塑形: 拿钥匙 / 开门给小奖励，使外部信号能进入策略梯度。
+    """MiniGrid 势能塑形(potential-based shaping): 以到当前子目标的曼哈顿距离定义潜能
+    Φ(s)，每步奖励 = γ·Φ(s') − Φ(s)，给出连续稠密引导，使外部信号能稳定进入策略梯度。
 
-    仅用于稀疏外部奖励任务(DoorKey 等只有终点 +1)。纯好奇心任务(Atari)不启用。
-    通过 env.unwrapped 读取内部状态，全部带防御式检查，缺属性则退化为无塑形。
+    子目标随完成度递进: 未拿钥匙 → 朝钥匙; 拿了钥匙未开门 → 朝门; 开门后 → 朝终点。
+    终点原始 +1 奖励保留叠加。仅用于稀疏外部奖励任务(DoorKey 等)，纯好奇心(Atari)不启用。
+    全部经 env.unwrapped 读取内部状态并带防御式检查，缺属性则退化为无塑形。
     """
 
-    def __init__(self, env, pickup_reward=0.3, door_reward=0.5, goal_reward=1.0):
+    def __init__(self, env, gamma=0.99, scale=0.1, goal_reward=1.0):
         super().__init__(env)
-        self.pickup_reward = pickup_reward
-        self.door_reward = door_reward
+        self.gamma = gamma
+        self.scale = scale          # 势能差放大系数
         self.goal_reward = goal_reward
-        self._carrying_prev = False
-        self._door_open_prev = False
+        self._prev_potential = None
 
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
-        self._carrying_prev = False
-        self._door_open_prev = False
+        self._prev_potential = self._potential()
         return obs, info
 
     def reward(self, reward):
-        uw = self.env.unwrapped
-        shaped = 0.0
-        # 拿钥匙
-        try:
-            carrying = getattr(uw, "carrying", None) is not None
-        except Exception:
-            carrying = False
-        if carrying and not self._carrying_prev:
-            shaped += self.pickup_reward
-        self._carrying_prev = carrying
-        # 开门
-        try:
-            door_open = self._any_door_open(uw)
-        except Exception:
-            door_open = False
-        if door_open and not self._door_open_prev:
-            shaped += self.door_reward
-        self._door_open_prev = door_open
-        # 终点(原环境 reward>0 视为到达)
+        cur = self._potential()
+        if self._prev_potential is None:
+            self._prev_potential = cur
+        shaped = self.gamma * cur - self._prev_potential
+        self._prev_potential = cur
         if reward and reward > 0:
             shaped += self.goal_reward
         return reward + shaped
 
-    @staticmethod
-    def _any_door_open(uw):
+    def _agent_pos(self, uw):
+        try:
+            return tuple(int(v) for v in uw.agent_pos)
+        except Exception:
+            return None
+
+    def _find_obj(self, uw, cls_name):
+        """在 grid 中找第一个指定类名的对象坐标, 返回 (x, y) 或 None。"""
+        grid = getattr(uw, "grid", None)
+        if grid is None:
+            return None
+        w = getattr(grid, "width", 0)
+        h = getattr(grid, "height", 0)
+        for i in range(w):
+            for j in range(h):
+                try:
+                    cell = grid.get(i, j)
+                except Exception:
+                    cell = None
+                if cell is not None and type(cell).__name__ == cls_name:
+                    return (i, j)
+        return None
+
+    def _any_door_open(self, uw):
         grid = getattr(uw, "grid", None)
         if grid is None:
             return False
-        w, h = getattr(grid, "width", 0), getattr(grid, "height", 0)
+        w = getattr(grid, "width", 0)
+        h = getattr(grid, "height", 0)
         for i in range(w):
             for j in range(h):
                 try:
@@ -71,6 +80,35 @@ class RewardShapingWrapper(gymnasium.RewardWrapper):
                     if getattr(cell, "is_open", False):
                         return True
         return False
+
+    def _potential(self):
+        """返回当前潜能(负值: 越接近当前子目标潜能越高)。防御式返回 0.0。"""
+        uw = self.env.unwrapped
+        agent = self._agent_pos(uw)
+        if agent is None:
+            return 0.0
+        try:
+            carrying = getattr(uw, "carrying", None) is not None
+        except Exception:
+            carrying = False
+        # 子目标递进: 未拿钥匙→钥匙; 拿了未开门→门; 否则→终点
+        if not carrying:
+            target = self._find_obj(uw, "Key")
+        else:
+            door_open = False
+            try:
+                door_open = self._any_door_open(uw)
+            except Exception:
+                door_open = False
+            if not door_open:
+                target = self._find_obj(uw, "Door")
+            else:
+                target = self._find_obj(uw, "Goal")
+        if target is None:
+            return 0.0
+        dist = abs(agent[0] - target[0]) + abs(agent[1] - target[1])
+        # 势能 = -距离 (越近越高), 乘以 scale 缩放
+        return -float(dist) * self.scale
 
 
 class FixedLayoutWrapper(gymnasium.Wrapper):
