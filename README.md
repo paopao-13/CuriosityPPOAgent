@@ -24,8 +24,7 @@
 | Atari Montezuma's Revenge | ~120 分 | **0**（10M 步，贪心 10 局） | — | 长程稀疏探索瓶颈，见 [Failure Analysis](#failure-analysis) |
 | MiniGrid DoorKey（纯好奇心，16×16） | 242 万步收敛 | **0.0**（1.5M 步） | 96.8 万步（success≥0.95） | success_rate，未解出 DoorKey；根因=等权优势合并淹没外部信号 |
 | MiniGrid DoorKey（课程学习，8×8） | — | **0.21**（约 2M 步：固定布局预热 500K + 随机泛化 1.5M） | 96.8 万步（success≥0.95） | 含奖励塑形 + 外部优势加权(ext_adv_coef=4)，非纯好奇心设置 |
-| MiniGrid DoorKey（势能塑形，8×8） | — | **1.00**（4M 步随机布局） | 96.8 万步（success≥0.95） | potential-based shaping（到子目标距离的连续稠密奖励）+ ext_adv_coef=2，非纯好奇心设置 |
-| MiniGrid DoorKey（势能塑形，8×8） | — | **1.00**（4M 步，success_rate 100 局贪心） | 96.8 万步（success≥0.95） | 势能塑形 Φ=−到子目标曼哈顿距离提供连续稠密引导；外部优势加权(ext_adv_coef=2)，非纯好奇心设置 |
+| MiniGrid DoorKey（势能塑形，8×8） | — | **1.00**（4M 步随机布局，100 局贪心 success_rate） | 96.8 万步（success≥0.95） | 势能塑形 Φ=−到子目标曼哈顿距离 + ext_adv_coef=2；非纯好奇心设置 |
 
 > † Crafter 本项目分数（0.2%）为**纯好奇心设置（无外在奖励塑形）**下的 22 成就几何均值，取自训练期自动评测（`results/ablation/crafter_full/seed_42/train.log`，step=1000448）。PPO 基线 15.6% 为带外在奖励引导的标准 PPO(ResNet)，二者训练条件不同，不宜直接等同优劣，仅作参考量级。MiniGrid 三行分数均可在本地复现：0.0 取自旧基线纯好奇心训练（`results/ablation/minigrid_doorkey_full/seed_42/train.log`，step=1501184）；0.21 取自课程学习（`results/ablation/minigrid_curriculum/phase2/seed_42/_wrapper.log`）；1.00 取自势能塑形（`results/ablation/minigrid_potential/seed_42/_wrapper.log`，评测尾段稳定于 1.00）。注意：0.21 与 1.00 均**非纯好奇心设置**（含奖励塑形 + 外部优势加权），纯好奇心基线仍为 0.0——这恰好说明本项目最具价值的发现是「等权优势合并淹没外部信号」这一根因诊断，而非好奇心模块本身。全部实测分数均可通过本地 checkpoint + `scripts/evaluate.py --env crafter/minigrid` 复现；模型权重因体积较大不纳入仓库。
 
@@ -40,9 +39,11 @@
 
 > full 与 no_icm 在 Montezuma 上均为 0 分，但两者训练步数相差 10 倍（10M vs 1M），**不能直接得出「ICM 无用」的结论**——消融的价值在于验证了三模块管线的可运行性与评测一致性；更严谨的等步数对比受训练预算限制未覆盖，详见 [Failure Analysis](#failure-analysis)。no_episodic / no_rnd 两组为架构设计内的预期对照，本次未分配训练预算实测，详见 `docs/ATARI_POSTTRAIN_AND_ABLATION.md`。
 
-### MiniGrid DoorKey-8×8 训练曲线
+### MiniGrid DoorKey-8×8 探索进展（三种设置对比）
 
-> 左：两种塑形设置的 success rate 对比（虚线为 0.95 目标）；右：势能塑形设置的收敛过程（稳定饱和至 1.0）。评测为 100 局贪心策略。
+> 三条 success_rate 曲线全部来自训练日志中的周期性评测数据（100 局贪心策略）。
+> 红线=纯好奇心全程 0.0 → 橙色=课程学习平台期 ~0.21 → 绿线=势能塑形收敛至 1.0。
+> 虚线为 0.95 目标。
 
 ![MiniGrid DoorKey-8x8 success rate](docs/figures/minigrid_curves.png)
 
@@ -169,6 +170,45 @@ RTX3060 只有 6GB 显存，直接跑会 OOM。主要做了这几个事：
 | `experiments/minigrid_doorkey_full.yaml` | MiniGrid DoorKey |
 | `experiments/atari_montezuma_full.yaml` | Atari Montezuma |
 | `experiments/config.yaml` | 全局默认参数 |
+
+## 设计取舍（Design Decisions）
+
+> 本节记录项目中的关键工程决策及其理由/代价，方便读者理解「为什么这样做而不是那样」。
+
+### 为什么用双轨优势权重而非等权合并
+
+原始 PPO 实现将外部优势 `adv_ext` 与内部优势 `adv_int` 以相同系数直接相加作为 PPO 的总优势。在 MiniGrid DoorKey 上这导致了一个隐蔽的 bug：内在奖励的量级（~0.3-1.0/step）远超外在奖励（成功才拿到 ~1.0），等权合并后梯度完全被内部信号主导，外在目标函数的梯度接近零——智能体根本收不到「开门有好处」的学习信号。
+
+**修复**：引入 `ext_adv_coef` 和 `int_adv_coef` 两个独立系数（Crafter 上 ext_adv_coef=2.0, MiniGrid 势能塑形上 ext_adv_coef=2），让外在信号获得足够的梯度份额。这个改动把 Crafter 的 eval_score 从 -0.9 拉到 0.6+，MiniGrid 从 0.0 拉到可训练。
+
+**代价**：多了一个需要调的超参。但相比等权合并导致的系统性失败，这个代价是合理的。
+
+### 为什么选势能塑形（Potential-based Shaping）而非离散里程碑奖励
+
+课程学习阶段用的是离散奖励塑形（拿钥匙+0.3 / 开门+0.3 / 终点+1.0）。这种做法有效但有两个问题：(1) 奖励值是手工设定的 magic number，不同环境需要重新调；(2) 离散奖励在某些状态转移处产生稀疏梯度（比如从「没拿钥匙」到「拿了钥匙」之间没有引导）。
+
+势能塑形用 Φ(s)=−到最近子目标的曼哈顿距离作为势能函数，每步奖励 = γΦ(s') − Φ(s)。这提供了**连续稠密的梯度信号**，且根据 Ng et al. (1999) 的理论保证不改变最优策略（optimal policy invariant）。实测中势能塑形让 success rate 从课程的 0.21 一路爬到 1.00 并稳定保持。
+
+**代价**：需要定义子目标序列和距离函数（对本项目来说就是 DoorKey 的钥匙→门→终点三阶段，曼哈顿距离在 grid world 里天然适用）。
+
+### 为什么双价值头用不同的折扣因子
+
+策略网络同时输出 $V_{ext}$（γ=0.999）和 $V_{int}$（γ=0.99）：
+- 外在奖励需要长程信用分配——从拿钥匙到进门可能跨数百步，高 γ 保证远期回报不被折扣殆尽；
+- 内在奖励是即时的新颖度信号，低 γ 让模型聚焦于「接下来几步哪里新颖」，避免长期累积的噪声 intrinsic value 估计不稳定。
+
+**替代方案考虑过但未采用**：单一价值头 + 总奖励（r_ext + r_int）会更简单，但在稀疏奖励下 r_int 远大于 r_ext 时，单一价值头的估计会被内在噪声淹没，效果退化为纯探索。
+
+### 显存优化的具体取舍
+
+| 优化 | 收益 | 代价 |
+|------|------|------|
+| FP16 混合精度 | 显存减半 | 需要 loss scaler，某些操作（layer norm）仍需 float32 |
+| 梯度累积（micro=128, accum=4） | 等效 batch=512 但只占 128 显存 | 训练 wall-clock 时间增加约 15% |
+| RolloutBuffer + EpisodicMemory 放 CPU | 节省 ~800MB GPU 显存 | 每 step 有一次 CPU↔GPU 数据传输 |
+| LRU 10000 条环形缓冲 | 内存上限可控，O(1) 插入/淘汰 | 最近邻搜索是线性扫描 O(10000)，CPU 开销 |
+
+最终峰值 ~2.2GB / 6GB，RTX3060 可以跑 512 个并行环境而不 OOM。
 
 ## 技术细节
 
