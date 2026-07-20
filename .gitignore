@@ -155,6 +155,7 @@ pnpm-debug.log*
 *.seed
 *.pid.lock
 
-# ---- 本地私有/面试内容（绝不进公开仓库） ----
+# ---- 本地私有内容（绝不进公开仓库） ----
 .workbuddy/
 GITHUB_PUSH_PREP.md
+docs/ATARI_RESUME.md
