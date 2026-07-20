@@ -21,6 +21,8 @@
 | 环境 | PPO 基线 | 本项目（实测） | 设计目标 | 说明 |
 |------|---------|--------------|---------|------|
 | Crafter（1M 环境步） | 15.6% | **0.2%**† | 19.0% | 22 个成就几何均值 |
+| Crafter 无好奇心标准 PPO（1M 步） | 15.6% | **0.0%** | 19.0% | 关掉 rnd/icm/episodic 三模块，纯标准 PPO 对照基线（step_990208） |
+
 | Atari Montezuma's Revenge | ~120 分 | **0**（10M 步，贪心 10 局） | — | 长程稀疏探索瓶颈，见 [Failure Analysis](#failure-analysis) |
 | MiniGrid DoorKey（纯好奇心，16×16） | 242 万步收敛 | **0.0**（1.5M 步） | 96.8 万步（success≥0.95） | success_rate，未解出 DoorKey；根因=等权优势合并淹没外部信号 |
 | MiniGrid DoorKey（课程学习，8×8） | — | **0.21**（约 2M 步：固定布局预热 500K + 随机泛化 1.5M） | 96.8 万步（success≥0.95） | 含奖励塑形 + 外部优势加权(ext_adv_coef=4)，非纯好奇心设置 |
