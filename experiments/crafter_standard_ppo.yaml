@@ -1,0 +1,50 @@
+# Crafter 无好奇心标准 PPO 基线 (对照 crafter_full 纯好奇心)
+# 关闭所有内在奖励模块 (rnd/icm/episodic enabled=false)
+# 仅用环境原始外部奖励训练标准 PPO, 作为"架构在常规条件下能跑"的对照基线
+# 关键: int_adv_coef=0.0 双保险, 即使内在奖励有残留也不进入策略梯度
+ppo:
+  lr: 1.0e-4
+  clip_range: 0.1
+  ppo_epochs: 4
+  gamma_ext: 0.999
+  gamma_int: 0.99
+  gae_lambda: 0.95
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  batch_size: 128
+  accumulation_steps: 4
+  n_steps: 128
+  n_envs: 8
+  ext_adv_coef: 1.0
+  int_adv_coef: 0.0
+
+rnd:
+  enabled: false
+  output_dim: 512
+  predictor_hidden: 512
+  obs_normalize: true
+  reward_normalize: true
+
+icm:
+  enabled: false
+  feature_dim: 288
+  eta: 0.2
+  hidden_dim: 256
+
+episodic:
+  enabled: false
+  k: 5
+  epsilon: 1.0e-3
+  L: 5
+  capacity: 10000
+
+env:
+  name: crafter
+  n_envs: 8
+  total_steps: 1000000
+
+ablation: standard_ppo
+use_amp: true
+seed: 42
+wandb_project: curiosity-ppo
